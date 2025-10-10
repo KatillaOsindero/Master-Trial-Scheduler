@@ -1,7 +1,7 @@
 # visit_scheduler.py — single patient; no procedures/staff; blackout dates & ranges;
-# weekend/holiday exclusion; start-time & duration dropdowns; status-only (no ⚠ column);
+# weekend exclusion; per-holiday toggles (observed); status in editor;
 # reordered columns; taller tables; anchor suggestions; Outlook export; Word export (participant);
-# protocol version shown ONLY in the protocol dropdown label.
+# protocol version shown ONLY in the protocol dropdown label. Participant handout labels "Visit Date".
 
 import streamlit as st
 import pandas as pd
@@ -64,34 +64,47 @@ def last_weekday_of_month(year, month, weekday):
     return d
 
 def observed(dt: date):
+    # Observed rules: if holiday falls on Sat -> observed Fri; on Sun -> observed Mon
     if dt.weekday() == 5:  # Sat
         return dt - timedelta(days=1)
     if dt.weekday() == 6:  # Sun
         return dt + timedelta(days=1)
     return dt
 
-def us_federal_holidays(year: int):
-    hol = set()
-    hol.add(observed(date(year, 1, 1)))                     # New Year's
-    hol.add(nth_weekday_of_month(year, 1, 0, 3))            # MLK
-    hol.add(nth_weekday_of_month(year, 2, 0, 3))            # Presidents
-    hol.add(last_weekday_of_month(year, 5, 0))              # Memorial
-    hol.add(observed(date(year, 6, 19)))                    # Juneteenth
-    hol.add(observed(date(year, 7, 4)))                     # Independence
-    hol.add(nth_weekday_of_month(year, 9, 0, 1))            # Labor
-    hol.add(nth_weekday_of_month(year, 10, 0, 2))           # Columbus/Indigenous
-    hol.add(observed(date(year, 11, 11)))                   # Veterans
-    hol.add(nth_weekday_of_month(year, 11, 3, 4))           # Thanksgiving
-    hol.add(observed(date(year, 12, 25)))                   # Christmas
-    return hol
+# ---- Per-holiday date generators (observed) ----
+def holiday_dates_for_year(year: int, flags: dict[str, bool]) -> set[date]:
+    s = set()
+    if flags.get("new_years", True):
+        s.add(observed(date(year, 1, 1)))
+    if flags.get("mlk", True):
+        s.add(nth_weekday_of_month(year, 1, 0, 3))  # 3rd Monday Jan
+    if flags.get("presidents", True):
+        s.add(nth_weekday_of_month(year, 2, 0, 3))  # 3rd Monday Feb
+    if flags.get("memorial", True):
+        s.add(last_weekday_of_month(year, 5, 0))    # last Monday May
+    if flags.get("juneteenth", True):
+        s.add(observed(date(year, 6, 19)))
+    if flags.get("independence", True):
+        s.add(observed(date(year, 7, 4)))
+    if flags.get("labor", True):
+        s.add(nth_weekday_of_month(year, 9, 0, 1))  # 1st Monday Sep
+    if flags.get("indigenous_columbus", True):
+        s.add(nth_weekday_of_month(year, 10, 0, 2)) # 2nd Monday Oct
+    if flags.get("veterans", True):
+        s.add(observed(date(year, 11, 11)))
+    if flags.get("thanksgiving", True):
+        s.add(nth_weekday_of_month(year, 11, 3, 4)) # 4th Thursday Nov
+    if flags.get("christmas", True):
+        s.add(observed(date(year, 12, 25)))
+    return s
 
-def build_holiday_set(date_min: date, date_max: date, include_us_federal: bool):
-    if not include_us_federal or date_min is None or date_max is None:
+def build_holiday_set(date_min: date, date_max: date, holiday_flags: dict[str, bool]):
+    if date_min is None or date_max is None:
         return set()
     years = set(range(date_min.year, date_max.year + 1))
     out = set()
     for y in years:
-        out |= us_federal_holidays(y)
+        out |= holiday_dates_for_year(y, holiday_flags)
     return out
 
 def nearest_allowed_date(target, earliest, latest, disallow_weekends, holiday_set, custom_blackouts):
@@ -127,7 +140,7 @@ def window_has_allowed_date(earliest, latest, disallow_weekends, holiday_set, cu
         d += timedelta(days=1)
     return False
 
-def suggest_anchor_dates(anchor, schedule_df, disallow_weekends, include_us_holidays, custom_blackouts, search_days=60):
+def suggest_anchor_dates(anchor, schedule_df, disallow_weekends, holiday_flags, custom_blackouts, search_days=60):
     anchor = _to_date(anchor)
     if anchor is None: return None, None
 
@@ -137,7 +150,7 @@ def suggest_anchor_dates(anchor, schedule_df, disallow_weekends, include_us_holi
     def all_visits_feasible(proposed_anchor):
         date_min = proposed_anchor + timedelta(days=min_day)
         date_max = proposed_anchor + timedelta(days=max_day)
-        holiday_set = build_holiday_set(date_min, date_max, include_us_holidays)
+        holiday_set = build_holiday_set(date_min, date_max, holiday_flags)
         tmp = schedule_df.copy()
         tmp["Target Date"] = pd.to_datetime(proposed_anchor) + pd.to_timedelta(tmp["Day From Baseline"], unit="D")
         tmp["Earliest"] = tmp["Target Date"] - pd.to_timedelta(tmp["Window Minus"], unit="D")
@@ -217,8 +230,39 @@ def _format_mmddyyyy(df, cols):
 with st.sidebar:
     st.subheader("⚙️ Settings")
     disallow_weekends = st.toggle("Disallow weekends", value=True)
-    include_us_holidays = st.toggle("Exclude US Federal Holidays", value=True)
-    st.caption("Holiday dates are observed when they fall on a weekend.")
+
+    st.subheader("🏳️‍🌈 Holidays to exclude (observed)")
+    # Defaults: ON for all federal holidays; user can toggle each off
+    c1, c2 = st.columns(2)
+    with c1:
+        h_new_years   = st.checkbox("New Year's Day", True)
+        h_mlk         = st.checkbox("MLK Day", True)
+        h_presidents  = st.checkbox("Presidents' Day", True)
+        h_memorial    = st.checkbox("Memorial Day", True)
+        h_juneteenth  = st.checkbox("Juneteenth", True)
+        h_independence= st.checkbox("Independence Day", True)
+    with c2:
+        h_labor       = st.checkbox("Labor Day", True)
+        h_indig_col   = st.checkbox("Indigenous Peoples’ Day (Columbus)", True)
+        h_veterans    = st.checkbox("Veterans Day", True)
+        h_thanks      = st.checkbox("Thanksgiving", True)
+        h_christmas   = st.checkbox("Christmas Day", True)
+
+    holiday_flags = {
+        "new_years": h_new_years,
+        "mlk": h_mlk,
+        "presidents": h_presidents,
+        "memorial": h_memorial,
+        "juneteenth": h_juneteenth,
+        "independence": h_independence,
+        "labor": h_labor,
+        "indigenous_columbus": h_indig_col,
+        "veterans": h_veterans,
+        "thanksgiving": h_thanks,
+        "christmas": h_christmas,
+    }
+
+    st.caption("Observed rules: if a holiday falls on Sat → observed Fri; on Sun → observed Mon.")
     st.caption("**PHI:** Use de-identified patient IDs only.")
 
 # -------------------- protocol dropdown (version shown only here) --------------------
@@ -342,7 +386,7 @@ def compute_visits(anchor: date):
     max_day = int(schedule["Day From Baseline"].max() + schedule["Window Plus"].max() + 7)
     date_min = anchor + timedelta(days=min_day)
     date_max = anchor + timedelta(days=max_day)
-    holiday_set = build_holiday_set(date_min, date_max, include_us_holidays)
+    holiday_set = build_holiday_set(date_min, date_max, holiday_flags)
 
     out = schedule.copy()
     out["Target Date"] = pd.to_datetime(anchor) + pd.to_timedelta(out["Day From Baseline"], unit="D")
@@ -381,35 +425,45 @@ def _annotate(df):
 # -------------------- schedule & adjust --------------------
 if ready:
     st.markdown("## 📅 Schedule & Adjust")
-    st.info("**How to choose a date:** click **Chosen Date** and pick from the calendar (mm/dd/yyyy). "
-            "Set **Start Time** and **Visit Duration** if you want calendar export and handouts. "
-            "The **Status** column shows whether a visit is in window.")
+    st.info(
+        "**How to choose a date:** click **Chosen Date** and pick from the calendar (mm/dd/yyyy). "
+        "Set **Start Time** and **Visit Duration** if you want calendar export and handouts. "
+        "The **Status** column shows whether a visit is in window."
+    )
 
+    # 1) Compute the schedule (auto-picked dates) and coerce date columns
     visits = compute_visits(anchor_date)
-    table = _coerce_dates(visits.copy(), ["Target Date","Earliest","Latest","Chosen Date"])
+    base_table = _coerce_dates(
+        visits.copy(),
+        ["Target Date", "Earliest", "Latest", "Chosen Date"]
+    )
 
-    # Desired order: Visit Name, Chosen Date, Start Time, Visit Duration, Target, Earliest, Latest, Status, then Day/Windows at end
+    # 2) Pre-compute Status so it shows *inside* the editor
+    seed_for_editor, _ = _annotate(base_table)
+
+    # 3) Show the editor with Status next to Chosen Date
+    # Order: Visit, Chosen Date, Status, Start Time, Duration, Target, Earliest, Latest, Day/Windows at end
     column_order = [
         "Visit Name",
         "Chosen Date",
+        "Status",
         "Start Time",
         "Visit Duration",
         "Target Date",
         "Earliest",
         "Latest",
-        "Status",
         "Day From Baseline",
         "Window Minus",
         "Window Plus",
     ]
 
-    table = st.data_editor(
-        table,
+    edited = st.data_editor(
+        seed_for_editor,
         use_container_width=True,
-        height=800,  # taller so you don’t have to scroll
+        height=800,  # tall to minimize scrolling
         hide_index=True,
         num_rows="fixed",
-        column_order=[c for c in column_order if c in table.columns],
+        column_order=[c for c in column_order if c in seed_for_editor.columns],
         column_config={
             "Visit Name":        st.column_config.TextColumn(disabled=True),
             "Day From Baseline": st.column_config.NumberColumn(disabled=True),
@@ -419,21 +473,22 @@ if ready:
             "Earliest":          st.column_config.DateColumn(disabled=True),
             "Latest":            st.column_config.DateColumn(disabled=True),
             "Chosen Date":       st.column_config.DateColumn(),
-            "Start Time":        st.column_config.SelectboxColumn(options=TIME_OPTS, required=False),
-            "Visit Duration":    st.column_config.SelectboxColumn(options=DUR_LABELS, required=False),
             "Status":            st.column_config.TextColumn(disabled=True),
+            "Start Time":        st.column_config.SelectboxColumn(options=[None]+TIME_OPTS, required=False),
+            "Visit Duration":    st.column_config.SelectboxColumn(options=[None]+DUR_LABELS, required=False),
         },
         key="single_visits_editor"
     )
 
-    table_with_status, any_out = _annotate(table)
+    # 4) Recompute Status based on the user’s latest edits (for exports & warnings)
+    table_with_status, any_out = _annotate(edited)
 
-    # Feasibility check under blackouts
+    # 5) Feasibility check under current blackouts/constraints
     min_day = int(schedule["Day From Baseline"].min() - schedule["Window Minus"].max() - 7)
     max_day = int(schedule["Day From Baseline"].max() + schedule["Window Plus"].max() + 7)
     date_min = anchor_date + timedelta(days=min_day)
     date_max = anchor_date + timedelta(days=max_day)
-    holiday_set_now = build_holiday_set(date_min, date_max, include_us_holidays)
+    holiday_set_now = build_holiday_set(date_min, date_max, holiday_flags)
     windows_ok = True
     tmp = schedule.copy()
     tmp["Target Date"] = pd.to_datetime(anchor_date) + pd.to_timedelta(tmp["Day From Baseline"], unit="D")
@@ -441,12 +496,15 @@ if ready:
     tmp["Latest"]   = tmp["Target Date"] + pd.to_timedelta(tmp["Window Plus"], unit="D")
     for _, r in tmp.iterrows():
         if not window_has_allowed_date(r["Earliest"], r["Latest"], disallow_weekends, holiday_set_now, custom_blackouts):
-            windows_ok = False; break
+            windows_ok = False
+            break
 
     if any_out:
         st.warning("Some visits are out of window. Please adjust **Chosen Date** to fall between **Earliest** and **Latest**.")
     if not windows_ok:
-        earlier_sug, later_sug = suggest_anchor_dates(anchor_date, schedule, disallow_weekends, include_us_holidays, custom_blackouts)
+        earlier_sug, later_sug = suggest_anchor_dates(
+            anchor_date, schedule, disallow_weekends, holiday_flags, custom_blackouts
+        )
         with st.container(border=True):
             st.error("Blackouts/constraints remove all allowed days for at least one visit window.")
             msg = "Suggested anchor dates:"
@@ -455,11 +513,18 @@ if ready:
             st.write(msg)
             c1, c2 = st.columns(2)
             if earlier_sug and c1.button(f"Apply earlier anchor ({earlier_sug.strftime('%m/%d/%Y')})"):
-                st.session_state["anchor_date_input"] = earlier_sug; st.rerun()
+                st.session_state["anchor_date_input"] = earlier_sug
+                st.rerun()
             if later_sug and c2.button(f"Apply later anchor ({later_sug.strftime('%m/%d/%Y')})"):
-                st.session_state["anchor_date_input"] = later_sug; st.rerun()
+                st.session_state["anchor_date_input"] = later_sug
+                st.rerun()
 
-    st.session_state["single_result"] = {"patient_id": patient_id, "anchor_date": anchor_date, "df": table_with_status.copy()}
+    # 6) Store for Export & Print
+    st.session_state["single_result"] = {
+        "patient_id": patient_id,
+        "anchor_date": anchor_date,
+        "df": table_with_status.copy()
+    }
 
 # -------------------- export & print --------------------
 st.markdown("## 🖨️ Export & Print")
@@ -484,6 +549,7 @@ def coordinator_view(df):
     return out
 
 def participant_view(df):
+    # Start with Chosen Date, then rename to Visit Date for user-facing outputs
     out = df.copy()[["Visit Name","Chosen Date","Start Time","Visit Duration"]].copy()
     out = _format_mmddyyyy(out, ["Chosen Date"])
     # compute Expected End Time if start time & duration are set
@@ -492,12 +558,7 @@ def participant_view(df):
         cd = _to_date(r.get("Chosen Date")); stime = r.get("Start Time"); dlabel = r.get("Visit Duration")
         if cd and stime and dlabel:
             start_dt = datetime.combine(cd, _to_time(stime) or dtime(9,0))
-            # resolve duration label -> minutes
-            dur_min = None
-            if dlabel in LABEL_TO_MIN:
-                dur_min = LABEL_TO_MIN[dlabel]
-            else:
-                dur_min = duration_label_to_minutes(dlabel)
+            dur_min = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel))
             if dur_min:
                 end_times.append((start_dt + timedelta(minutes=int(dur_min))).strftime("%I:%M %p"))
             else:
@@ -505,7 +566,9 @@ def participant_view(df):
         else:
             end_times.append("")
     out["Expected End Time"] = end_times
-    out = out[["Visit Name","Chosen Date","Start Time","Expected End Time","Visit Duration"]]
+    # Rename for display/export
+    out.rename(columns={"Chosen Date": "Visit Date"}, inplace=True)
+    out = out[["Visit Name","Visit Date","Start Time","Expected End Time","Visit Duration"]]
     return out
 
 left, right = st.columns([2, 1])
@@ -530,13 +593,13 @@ with left:
                            file_name=f"{fname_root}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # Word export (participant only)
+        # Word export (participant only) — uses "Visit Date" label
         if role == "Participant handout":
             doc = Document()
             doc.add_heading('Participant Visit Handout', level=1)
             doc.add_paragraph("Times are estimates and may vary.").runs[0].italic = True
 
-            headers = ["Visit Name", "Chosen Date", "Start Time", "Expected End Time", "Visit Duration"]
+            headers = ["Visit Name", "Visit Date", "Start Time", "Expected End Time", "Visit Duration"]
             t = doc.add_table(rows=1, cols=len(headers))
             t.style = "Table Grid"
             hdr_cells = t.rows[0].cells
@@ -545,7 +608,7 @@ with left:
             for _, r in table.iterrows():
                 row = t.add_row().cells
                 row[0].text = str(r.get("Visit Name",""))
-                row[1].text = str(r.get("Chosen Date",""))
+                row[1].text = str(r.get("Visit Date",""))
                 row[2].text = str(r.get("Start Time",""))
                 row[3].text = str(r.get("Expected End Time",""))
                 row[4].text = str(r.get("Visit Duration",""))
@@ -567,11 +630,7 @@ with left:
                 if not cd: continue
                 start_t = _to_time(r.get("Start Time"))
                 dlabel = r.get("Visit Duration")
-                dur = None
-                if dlabel in LABEL_TO_MIN:
-                    dur = LABEL_TO_MIN[dlabel]
-                else:
-                    dur = duration_label_to_minutes(dlabel) if dlabel else None
+                dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
 
                 window_txt = f"Window {r.get('Earliest')} to {r.get('Latest')}"
                 desc = f"{proto_base}\\n{window_txt}"  # version intentionally not included
@@ -586,6 +645,7 @@ with left:
 
 with right:
     st.markdown("### 🧾 Tips")
+    st.write("- Toggle specific holidays off if your site is open that day.")
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
