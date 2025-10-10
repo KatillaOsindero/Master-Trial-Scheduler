@@ -1,8 +1,10 @@
-# visit_scheduler.py — Single-patient only
-# Features: protocol dropdown, single/range blackouts, anchor suggestions,
-# red-dot flag for out-of-window, Start Time & Duration dropdowns,
-# participant Excel handout (Visit Name + Chosen Date), Outlook .ics export,
-# mm/dd/yyyy formatting.
+# visit_scheduler.py — Single-patient only, PHI warnings, human-friendly durations
+# Features:
+# - Duration dropdown with labels: "30 minutes", "1 hour", "1 hour 30 minutes", … "12 hours"
+# - Participant handout shows Start Time + Expected End Time (+ disclaimer)
+# - Bold red "DO NOT ENTER PHI" warning next to Patient ID
+# - Single/range blackouts, anchor suggestions, red-dot flag, Outlook .ics export
+# - Dates shown/exported as mm/dd/yyyy
 
 import streamlit as st
 import pandas as pd
@@ -13,6 +15,15 @@ import io
 st.set_page_config(page_title="Visit Scheduler", layout="wide")
 st.markdown("# 🧬 Visit Scheduler")
 st.caption("Choose a protocol (IGC / ATAI / Reunion ADCO), set a patient and constraints, pick dates, then export. No file uploads needed.")
+
+# PHI disclaimer banner
+with st.container(border=True):
+    st.markdown(
+        "### ⚠️ Privacy Notice\n"
+        "- **Do not enter Protected Health Information (PHI).** Use de-identified IDs only.\n"
+        "- This tool does not intentionally store data permanently, but hosting platforms may keep logs/telemetry.\n"
+        "- If you require full HIPAA/PHI compliance, use de-identified inputs and export locally."
+    )
 
 REQUIRED_COLS = ["Day From Baseline", "Window Minus", "Window Plus"]
 
@@ -55,25 +66,25 @@ def last_weekday_of_month(year, month, weekday):
     return d
 
 def observed(dt: date):
-    if dt.weekday() == 5:  # Sat
+    if dt.weekday() == 5:
         return dt - timedelta(days=1)
-    if dt.weekday() == 6:  # Sun
+    if dt.weekday() == 6:
         return dt + timedelta(days=1)
     return dt
 
 def us_federal_holidays(year: int):
     hol = set()
     hol.add(observed(date(year, 1, 1)))
-    hol.add(nth_weekday_of_month(year, 1, 0, 3))      # MLK
-    hol.add(nth_weekday_of_month(year, 2, 0, 3))      # Presidents
-    hol.add(last_weekday_of_month(year, 5, 0))        # Memorial
-    hol.add(observed(date(year, 6, 19)))              # Juneteenth
-    hol.add(observed(date(year, 7, 4)))               # Independence
-    hol.add(nth_weekday_of_month(year, 9, 0, 1))      # Labor
-    hol.add(nth_weekday_of_month(year, 10, 0, 2))     # Columbus
-    hol.add(observed(date(year, 11, 11)))             # Veterans
-    hol.add(nth_weekday_of_month(year, 11, 3, 4))     # Thanksgiving
-    hol.add(observed(date(year, 12, 25)))             # Christmas
+    hol.add(nth_weekday_of_month(year, 1, 0, 3))
+    hol.add(nth_weekday_of_month(year, 2, 0, 3))
+    hol.add(last_weekday_of_month(year, 5, 0))
+    hol.add(observed(date(year, 6, 19)))
+    hol.add(observed(date(year, 7, 4)))
+    hol.add(nth_weekday_of_month(year, 9, 0, 1))
+    hol.add(nth_weekday_of_month(year, 10, 0, 2))
+    hol.add(observed(date(year, 11, 11)))
+    hol.add(nth_weekday_of_month(year, 11, 3, 4))
+    hol.add(observed(date(year, 12, 25)))
     return hol
 
 def build_holiday_set(date_min: date, date_max: date, include_us_federal: bool):
@@ -105,7 +116,6 @@ def nearest_allowed_date(target, earliest, latest, disallow_weekends, holiday_se
 
     if allowed(target):
         return target
-
     span = (latest - earliest).days
     for k in range(1, span + 1):
         plus = target + timedelta(days=k)
@@ -169,9 +179,7 @@ def suggest_anchor_dates(anchor, schedule_df, disallow_weekends, include_us_holi
 def make_ics(events, cal_name="Visit Schedule"):
     def dtstamp():
         return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    lines = [
-        "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Visit Scheduler//EN",f"X-WR-CALNAME:{cal_name}"
-    ]
+    lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Visit Scheduler//EN",f"X-WR-CALNAME:{cal_name}"]
     for ev in events:
         start_t = ev.get("start_time") or dtime(hour=9, minute=0)
         dur_min = int(ev.get("duration_min") or 60)
@@ -192,12 +200,53 @@ def make_ics(events, cal_name="Visit Schedule"):
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines).encode("utf-8")
 
+# Duration label helpers
+def duration_minutes_to_label(m):
+    m = int(m)
+    if m < 60:
+        return f"{m} minutes"
+    h, rem = divmod(m, 60)
+    if rem == 0:
+        return f"{h} hour" if h == 1 else f"{h} hours"
+    return f"{h} hour {rem} minutes" if h == 1 else f"{h} hours {rem} minutes"
+
+def duration_label_to_minutes(label):
+    s = str(label).lower().strip()
+    if "minute" in s or "hour" in s:
+        # parse formats like "1 hour 30 minutes", "2 hours", "45 minutes"
+        h = 0; m = 0
+        parts = s.replace("minutes", "minute").replace("hours", "hour").split()
+        try:
+            if "hour" in parts:
+                i = parts.index("hour")
+                h = int(parts[i-1])
+            if "minute" in parts:
+                j = parts.index("minute")
+                m = int(parts[j-1])
+            return h * 60 + m
+        except Exception:
+            pass
+    # fallback: numeric
+    try:
+        return int(float(label))
+    except Exception:
+        return None
+
+# Build duration labels list (30..720 by 30)
+DUR_MINUTES = list(range(30, 721, 30))
+DUR_LABELS = [duration_minutes_to_label(m) for m in DUR_MINUTES]
+LABEL_TO_MIN = {lab: mins for lab, mins in zip(DUR_LABELS, DUR_MINUTES)}
+
+# Time dropdown options
+TIME_OPTS = [f"{(h%12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}" for h in range(24) for m in (0, 30)]
+
 # ---------- Sidebar ----------
 with st.sidebar:
     st.subheader("⚙️ Settings")
     disallow_weekends = st.toggle("Disallow weekends", value=True)
     include_us_holidays = st.toggle("Exclude US Federal Holidays", value=True)
     st.caption("Holiday dates are observed when they fall on a weekend.")
+    st.caption("**PHI:** Use de-identified patient IDs only.")
 
 # ---------- Protocol loader ----------
 def list_protocol_csvs():
@@ -215,8 +264,11 @@ def load_protocol(path: Path) -> pd.DataFrame:
         df["Visit Name"] = [f"Visit {i+1}" for i in range(len(df))]
     for c in REQUIRED_COLS:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-    if "Start Time" not in df.columns: df["Start Time"] = ""
-    if "Visit Duration (min)" not in df.columns: df["Visit Duration (min)"] = ""
+    # Ensure optional columns exist
+    if "Start Time" not in df.columns:
+        df["Start Time"] = pd.Series([None] * len(df), dtype="object")
+    if "Visit Duration" not in df.columns:
+        df["Visit Duration"] = pd.Series([None] * len(df), dtype="object")
     return df
 
 protocols = list_protocol_csvs()
@@ -231,13 +283,17 @@ except Exception as e:
     st.error(f"Error loading protocol: {e}")
     st.stop()
 
-# ---------- Patient ----------
+# ---------- Patient (with PHI warning) ----------
 st.markdown("## 👤 Patient")
 c1, c2 = st.columns([1, 1])
+
 with c1:
-    patient_id = st.text_input("Patient ID")
+    st.markdown("**Patient ID — :red[DO NOT ENTER PHI]**")
+    patient_id = st.text_input("Patient ID", label_visibility="collapsed")
+
 with c2:
     anchor_date = st.date_input("Anchor Date", value=date.today(), key="anchor_date_input")
+
 notes = st.text_area("Optional Notes (internal)")
 ready = bool(patient_id and anchor_date)
 
@@ -255,10 +311,7 @@ with c_top1:
 
 with c_top2:
     st.markdown("**Custom blackout ranges (start–end, inclusive)**")
-    range_seed = pd.DataFrame({
-        "Start": pd.Series([], dtype="datetime64[ns]"),
-        "End":   pd.Series([], dtype="datetime64[ns]"),
-    })
+    range_seed = pd.DataFrame({"Start": pd.Series([], dtype="datetime64[ns]"), "End": pd.Series([], dtype="datetime64[ns]")})
     range_blackouts_df = st.data_editor(
         range_seed, num_rows="dynamic", use_container_width=True,
         column_config={"Start": st.column_config.DateColumn(), "End": st.column_config.DateColumn()},
@@ -304,8 +357,18 @@ def compute_visits_for_patient(anchor: date):
         )
         chosen.append(ch)
     out["Chosen Date"] = chosen
-    if "Start Time" not in out.columns: out["Start Time"] = ""
-    if "Visit Duration (min)" not in out.columns: out["Visit Duration (min)"] = ""
+
+    # Ensure optional columns exist & are object dtype
+    if "Start Time" not in out.columns:
+        out["Start Time"] = pd.Series([None] * len(out), dtype="object")
+    else:
+        out["Start Time"] = out["Start Time"].where(out["Start Time"].notna(), None).astype("object")
+
+    if "Visit Duration" not in out.columns:
+        out["Visit Duration"] = pd.Series([None] * len(out), dtype="object")
+    else:
+        out["Visit Duration"] = out["Visit Duration"].where(out["Visit Duration"].notna(), None).astype("object")
+
     return out
 
 def _coerce_to_date_cols(df, cols):
@@ -340,9 +403,17 @@ def _format_mmddyyyy(df, cols):
             df[c] = pd.to_datetime(df[c], errors="coerce").dt.strftime("%m/%d/%Y")
     return df
 
-# Dropdown options
-TIME_OPTS = [f"{(h%12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}" for h in range(24) for m in (0, 30)]
-DUR_OPTS  = list(range(30, 721, 30))  # minutes up to 12 hours
+def _format_time_str(t):
+    if not t:
+        return ""
+    try:
+        return datetime.strptime(str(t), "%I:%M %p").strftime("%I:%M %p")
+    except Exception:
+        try:
+            # if already time object or another format
+            return pd.to_datetime(t).strftime("%I:%M %p")
+        except Exception:
+            return str(t)
 
 # ---------- Schedule & adjust ----------
 if ready:
@@ -352,16 +423,27 @@ if ready:
         "1) Click the **Chosen Date** cell for a visit.\n"
         "2) Pick a date from the calendar popup (mm/dd/yyyy).\n"
         "3) A red dot **🔴** next to the date means it is **out of window**.\n"
-        "4) (Optional) Pick **Start Time** and **Visit Duration** to include in Outlook export."
+        "4) (Optional) Pick **Start Time** and **Visit Duration** to include in Outlook export and handouts."
     )
 
     visits = compute_visits_for_patient(anchor_date)
     table = _coerce_to_date_cols(visits.copy(), ["Target Date", "Earliest", "Latest", "Chosen Date"])
 
+    # Column order with time/duration next to Chosen Date
+    column_order = [
+        "Visit Name", "Day From Baseline",
+        "Target Date", "Earliest", "Latest",
+        "⚠", "Chosen Date", "Start Time", "Visit Duration",
+        "Status", "Window Minus", "Window Plus"
+    ]
+
     table = st.data_editor(
         table,
         use_container_width=True,
+        height=640,
+        hide_index=True,
         num_rows="fixed",
+        column_order=[c for c in column_order if c in table.columns],
         column_config={
             "Visit Name": st.column_config.TextColumn(disabled=True),
             "Day From Baseline": st.column_config.NumberColumn(disabled=True),
@@ -371,8 +453,8 @@ if ready:
             "Earliest": st.column_config.DateColumn(disabled=True),
             "Latest": st.column_config.DateColumn(disabled=True),
             "Chosen Date": st.column_config.DateColumn(),
-            "Start Time": st.column_config.SelectboxColumn(options=TIME_OPTS, required=False),
-            "Visit Duration (min)": st.column_config.SelectboxColumn(options=DUR_OPTS, required=False),
+            "Start Time": st.column_config.SelectboxColumn(options=TIME_OPTS, required=False, help="Optional start time"),
+            "Visit Duration": st.column_config.SelectboxColumn(options=DUR_LABELS, required=False, help="Optional duration"),
         },
         key="single_visits_editor"
     )
@@ -427,15 +509,37 @@ role = st.radio("Role", ["Coordinator view", "Participant handout"], horizontal=
 
 def coordinator_view(df):
     cols = ["Visit Name","Day From Baseline","Target Date","Earliest","Latest","⚠","Chosen Date",
-            "Status","Window Minus","Window Plus","Start Time","Visit Duration (min)"]
+            "Status","Window Minus","Window Plus","Start Time","Visit Duration"]
     out = df.copy()
     out = out[[c for c in cols if c in out.columns]].copy()
     out = _format_mmddyyyy(out, ["Target Date","Earliest","Latest","Chosen Date"])
     return out
 
 def participant_view(df):
-    out = df.copy()[["Visit Name","Chosen Date"]].copy()
+    out = df.copy()[["Visit Name","Chosen Date","Start Time","Visit Duration"]].copy()
     out = _format_mmddyyyy(out, ["Chosen Date"])
+    # Compute Expected End Time if both Start Time and Duration present
+    end_times = []
+    for _, r in out.iterrows():
+        cd = _to_date(r.get("Chosen Date"))
+        stime = r.get("Start Time")
+        dlabel = r.get("Visit Duration")
+        if cd and stime and dlabel:
+            try:
+                start_dt = datetime.combine(cd, _to_time(stime) or dtime(9, 0))
+                dur_min = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel))
+                if dur_min:
+                    end_dt = start_dt + timedelta(minutes=int(dur_min))
+                    end_times.append(end_dt.strftime("%I:%M %p"))
+                else:
+                    end_times.append("")
+            except Exception:
+                end_times.append("")
+        else:
+            end_times.append("")
+    out["Expected End Time"] = end_times
+    # Reorder for handout clarity
+    out = out[["Visit Name","Chosen Date","Start Time","Expected End Time","Visit Duration"]]
     return out
 
 left, right = st.columns([2, 1])
@@ -444,12 +548,9 @@ with left:
     if "single_result" in st.session_state and ready:
         res = st.session_state["single_result"]
         df = res["df"].copy()
-        if role == "Coordinator view":
-            table = coordinator_view(df)
-        else:
-            table = participant_view(df)
+        table = coordinator_view(df) if role == "Coordinator view" else participant_view(df)
 
-        st.dataframe(table, use_container_width=True)
+        st.dataframe(table, use_container_width=True, height=480)
 
         # CSV
         st.download_button(
@@ -462,6 +563,13 @@ with left:
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
             sheet = "Schedule" if role == "Coordinator view" else "Participant Handout"
+            # Add participant disclaimer on a separate sheet if participant view
+            if role != "Coordinator view":
+                pd.DataFrame({
+                    "Note":[
+                        "Times are estimates. Actual visit end time may vary due to clinical needs."
+                    ]
+                }).to_excel(writer, index=False, sheet_name="Disclaimer")
             table.to_excel(writer, index=False, sheet_name=sheet)
         st.download_button(
             "⬇️ Download Excel",
@@ -470,7 +578,7 @@ with left:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # Outlook ICS (only uses Chosen Date rows; optional time/duration if present)
+        # Outlook ICS (Coordinator view only; uses duration label -> minutes)
         if role == "Coordinator view":
             events = []
             for _, r in df.iterrows():
@@ -478,11 +586,8 @@ with left:
                 if not cd:
                     continue
                 start_t = _to_time(r.get("Start Time"))
-                dur = r.get("Visit Duration (min)")
-                try:
-                    dur = int(dur) if str(dur).strip() != "" else None
-                except Exception:
-                    dur = None
+                dlabel = r.get("Visit Duration")
+                dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
                 summary = f"{res['patient_id']} · {r.get('Visit Name','Visit')}"
                 desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
                 events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
@@ -498,5 +603,6 @@ with right:
     st.write("- **Single-day** and **range** blackouts are supported; ranges are inclusive.")
     st.write("- If blackouts make a visit impossible, you’ll see **suggested anchor dates** (apply with one click).")
     st.write("- **Red dot (🔴)** next to a date means it’s **out of window**.")
-    st.write("- Use **Start Time** and **Visit Duration** dropdowns if you want them included in Outlook exports.")
+    st.write("- **Start Time** and **Visit Duration** dropdowns are next to **Chosen Date**.")
+    st.write("- **Participant handout** shows **Start Time** and **Expected End Time** (estimate).")
     st.write("- All dates display/export as **mm/dd/yyyy**.")
