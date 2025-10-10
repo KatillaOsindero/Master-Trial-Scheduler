@@ -1,5 +1,5 @@
 # visit_scheduler.py — single patient; no procedures/staff; blackout dates & ranges;
-# weekend exclusion; per-holiday toggles (observed); status in editor;
+# weekend exclusion; per-holiday toggles (no observed shifting); status in editor;
 # reordered columns; taller tables; anchor suggestions; Outlook export; Word export (participant);
 # protocol version shown ONLY in the protocol dropdown label. Participant handout labels "Visit Date".
 
@@ -63,39 +63,35 @@ def last_weekday_of_month(year, month, weekday):
         d -= timedelta(days=1)
     return d
 
-def observed(dt: date):
-    # Observed rules: if holiday falls on Sat -> observed Fri; on Sun -> observed Mon
-    if dt.weekday() == 5:  # Sat
-        return dt - timedelta(days=1)
-    if dt.weekday() == 6:  # Sun
-        return dt + timedelta(days=1)
-    return dt
-
-# ---- Per-holiday date generators (observed) ----
+# ---- Per-holiday date generators (NO observed shifting) ----
 def holiday_dates_for_year(year: int, flags: dict[str, bool]) -> set[date]:
+    """
+    Returns exact holiday dates for the given year using the standard definitions
+    (no 'observed' Friday/Monday shifting when holidays fall on weekends).
+    """
     s = set()
     if flags.get("new_years", True):
-        s.add(observed(date(year, 1, 1)))
+        s.add(date(year, 1, 1))                       # New Year's Day (Jan 1)
     if flags.get("mlk", True):
-        s.add(nth_weekday_of_month(year, 1, 0, 3))  # 3rd Monday Jan
+        s.add(nth_weekday_of_month(year, 1, 0, 3))    # 3rd Monday in Jan
     if flags.get("presidents", True):
-        s.add(nth_weekday_of_month(year, 2, 0, 3))  # 3rd Monday Feb
+        s.add(nth_weekday_of_month(year, 2, 0, 3))    # 3rd Monday in Feb
     if flags.get("memorial", True):
-        s.add(last_weekday_of_month(year, 5, 0))    # last Monday May
+        s.add(last_weekday_of_month(year, 5, 0))      # Last Monday in May
     if flags.get("juneteenth", True):
-        s.add(observed(date(year, 6, 19)))
+        s.add(date(year, 6, 19))                      # Juneteenth (Jun 19)
     if flags.get("independence", True):
-        s.add(observed(date(year, 7, 4)))
+        s.add(date(year, 7, 4))                       # Independence Day (Jul 4)
     if flags.get("labor", True):
-        s.add(nth_weekday_of_month(year, 9, 0, 1))  # 1st Monday Sep
+        s.add(nth_weekday_of_month(year, 9, 0, 1))    # 1st Monday in Sep
     if flags.get("indigenous_columbus", True):
-        s.add(nth_weekday_of_month(year, 10, 0, 2)) # 2nd Monday Oct
+        s.add(nth_weekday_of_month(year, 10, 0, 2))   # 2nd Monday in Oct
     if flags.get("veterans", True):
-        s.add(observed(date(year, 11, 11)))
+        s.add(date(year, 11, 11))                     # Veterans Day (Nov 11)
     if flags.get("thanksgiving", True):
-        s.add(nth_weekday_of_month(year, 11, 3, 4)) # 4th Thursday Nov
+        s.add(nth_weekday_of_month(year, 11, 3, 4))   # 4th Thursday in Nov
     if flags.get("christmas", True):
-        s.add(observed(date(year, 12, 25)))
+        s.add(date(year, 12, 25))                     # Christmas Day (Dec 25)
     return s
 
 def build_holiday_set(date_min: date, date_max: date, holiday_flags: dict[str, bool]):
@@ -231,22 +227,19 @@ with st.sidebar:
     st.subheader("⚙️ Settings")
     disallow_weekends = st.toggle("Disallow weekends", value=True)
 
-    st.subheader("🏳️‍🌈 Holidays to exclude (observed)")
-    # Defaults: ON for all federal holidays; user can toggle each off
-    c1, c2 = st.columns(2)
-    with c1:
-        h_new_years   = st.checkbox("New Year's Day", True)
-        h_mlk         = st.checkbox("MLK Day", True)
-        h_presidents  = st.checkbox("Presidents' Day", True)
-        h_memorial    = st.checkbox("Memorial Day", True)
-        h_juneteenth  = st.checkbox("Juneteenth", True)
-        h_independence= st.checkbox("Independence Day", True)
-    with c2:
-        h_labor       = st.checkbox("Labor Day", True)
-        h_indig_col   = st.checkbox("Indigenous Peoples’ Day (Columbus)", True)
-        h_veterans    = st.checkbox("Veterans Day", True)
-        h_thanks      = st.checkbox("Thanksgiving", True)
-        h_christmas   = st.checkbox("Christmas Day", True)
+    st.subheader("🎯 Holidays to exclude")
+    # Defaults: ON for all listed holidays; user can toggle each independently
+    h_new_years    = st.checkbox("New Year's Day (Jan 1)", True)
+    h_mlk          = st.checkbox("MLK Day (3rd Mon in Jan)", True)
+    h_presidents   = st.checkbox("Presidents' Day (3rd Mon in Feb)", True)
+    h_memorial     = st.checkbox("Memorial Day (last Mon in May)", True)
+    h_juneteenth   = st.checkbox("Juneteenth (Jun 19)", True)
+    h_independence = st.checkbox("Independence Day (Jul 4)", True)
+    h_labor        = st.checkbox("Labor Day (1st Mon in Sep)", True)
+    h_indig_col    = st.checkbox("Indigenous Peoples’/Columbus Day (2nd Mon in Oct)", True)
+    h_veterans     = st.checkbox("Veterans Day (Nov 11)", True)
+    h_thanks       = st.checkbox("Thanksgiving (4th Thu in Nov)", True)
+    h_christmas    = st.checkbox("Christmas Day (Dec 25)", True)
 
     holiday_flags = {
         "new_years": h_new_years,
@@ -262,7 +255,6 @@ with st.sidebar:
         "christmas": h_christmas,
     }
 
-    st.caption("Observed rules: if a holiday falls on Sat → observed Fri; on Sun → observed Mon.")
     st.caption("**PHI:** Use de-identified patient IDs only.")
 
 # -------------------- protocol dropdown (version shown only here) --------------------
@@ -649,3 +641,4 @@ with right:
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
+
