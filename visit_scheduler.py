@@ -1,5 +1,6 @@
-# visit_scheduler.py — fixed labels (IGC / ATAI / Reunion ADCO), no duration column
-# Adds: in-window validation with Status, warning banner, Outlook wording, on-screen instructions
+# visit_scheduler.py — IGC/ATAI/Reunion ADCO; no duration column by default
+# Adds: red-dot flag next to Chosen Date, optional Start Time & Visit Duration,
+# participant handout Excel (Visit Name + Chosen Date), mm/dd/yyyy formatting, Outlook wording
 
 import streamlit as st
 import pandas as pd
@@ -8,21 +9,13 @@ from pathlib import Path
 import io
 import zipfile
 
-# ----------------------
-# Page config & header
-# ----------------------
 st.set_page_config(page_title="Visit Scheduler", layout="wide")
 st.markdown("# 🧬 Visit Scheduler")
 st.caption("Choose a protocol (IGC / ATAI / Reunion ADCO), add patient(s), apply constraints, pick dates, then export. No file uploads needed.")
 
-# ----------------------
-# Required columns
-# ----------------------
 REQUIRED_COLS = ["Day From Baseline", "Window Minus", "Window Plus"]
 
-# ----------------------
-# Helpers
-# ----------------------
+# ---------- Helpers ----------
 def _to_date(x):
     if pd.isna(x) or x == "":
         return None
@@ -30,6 +23,22 @@ def _to_date(x):
         return pd.to_datetime(x).date()
     try:
         return pd.to_datetime(x).date()
+    except Exception:
+        return None
+
+def _to_time(x):
+    """Parse 'HH:MM' or 'h:mm AM/PM' to datetime.time, else None."""
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
+        return None
+    s = str(x).strip()
+    for fmt in ["%H:%M", "%I:%M %p", "%I:%M%p", "%H%M"]:
+        try:
+            return datetime.strptime(s, fmt).time()
+        except Exception:
+            continue
+    # last-resort parse
+    try:
+        return pd.to_datetime(s).time()
     except Exception:
         return None
 
@@ -56,15 +65,15 @@ def observed(dt: date):
 def us_federal_holidays(year: int):
     hol = set()
     hol.add(observed(date(year, 1, 1)))                          # New Year’s Day
-    hol.add(nth_weekday_of_month(year, 1, 0, 3))                 # MLK Day (3rd Mon Jan)
+    hol.add(nth_weekday_of_month(year, 1, 0, 3))                 # MLK Day
     hol.add(nth_weekday_of_month(year, 2, 0, 3))                 # Washington’s Birthday
-    hol.add(last_weekday_of_month(year, 5, 0))                   # Memorial Day (last Mon May)
+    hol.add(last_weekday_of_month(year, 5, 0))                   # Memorial Day
     hol.add(observed(date(year, 6, 19)))                         # Juneteenth
     hol.add(observed(date(year, 7, 4)))                          # Independence Day
     hol.add(nth_weekday_of_month(year, 9, 0, 1))                 # Labor Day
     hol.add(nth_weekday_of_month(year, 10, 0, 2))                # Columbus Day
     hol.add(observed(date(year, 11, 11)))                        # Veterans Day
-    hol.add(nth_weekday_of_month(year, 11, 3, 4))                # Thanksgiving (4th Thu)
+    hol.add(nth_weekday_of_month(year, 11, 3, 4))                # Thanksgiving
     hol.add(observed(date(year, 12, 25)))                        # Christmas
     return hol
 
@@ -78,10 +87,6 @@ def build_holiday_set(date_min: date, date_max: date, include_us_federal: bool):
     return out
 
 def nearest_allowed_date(target, earliest, latest, disallow_weekends, holiday_set, custom_blackouts):
-    """
-    Find the nearest allowed date to 'target' within [earliest, latest]
-    avoiding weekends/holidays/blackouts. Search order: 0, +1, -1, +2, -2, ...
-    """
     if target is None or earliest is None or latest is None:
         return None
     target = pd.to_datetime(target).date()
@@ -110,20 +115,13 @@ def nearest_allowed_date(target, earliest, latest, disallow_weekends, holiday_se
             return plus
         if allowed(minus):
             return minus
-    # fall back to boundaries if possible
     for cand in [earliest, latest]:
         if (not disallow_weekends or cand.weekday() < 5) and cand not in holiday_set and cand not in custom_blackouts:
             return cand
     return None
 
 def make_ics(events, cal_name="Visit Schedule"):
-    """
-    events: list of dicts with keys:
-        - summary (str)
-        - date (date)
-        - description (str, optional)
-        - duration_min (int, optional; default 60 if omitted)
-    """
+    """events: list of dicts -> summary, date, start_time (optional), duration_min (optional), description (optional)"""
     def dtstamp():
         return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
@@ -134,36 +132,34 @@ def make_ics(events, cal_name="Visit Schedule"):
         f"X-WR-CALNAME:{cal_name}",
     ]
     for ev in events:
-        start_dt = datetime.combine(ev["date"], dtime(hour=9, minute=0))  # default 9:00 AM
+        # Defaults if optional fields are not provided
+        start_t = ev.get("start_time") or dtime(hour=9, minute=0)
         dur_min = int(ev.get("duration_min") or 60)
+        start_dt = datetime.combine(ev["date"], start_t)
         end_dt = start_dt + timedelta(minutes=dur_min)
         lines += [
             "BEGIN:VEVENT",
-            f"UID:{hash((ev['summary'], ev['date']))}@visitscheduler",
+            f"UID:{hash((ev['summary'], ev['date'], start_t, dur_min))}@visitscheduler",
             f"DTSTAMP:{dtstamp()}",
             f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}",
             f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}",
             f"SUMMARY:{ev['summary']}",
         ]
         if ev.get("description"):
-            desc = ev["description"].replace(",", r"\,").replace(";", r"\;")
+            desc = str(ev["description"]).replace(",", r"\,").replace(";", r"\;")
             lines.append(f"DESCRIPTION:{desc}")
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines).encode("utf-8")
 
-# ----------------------
-# Sidebar: global toggles
-# ----------------------
+# ---------- Sidebar ----------
 with st.sidebar:
     st.subheader("⚙️ Settings")
     disallow_weekends = st.toggle("Disallow weekends", value=True)
     include_us_holidays = st.toggle("Exclude US Federal Holidays", value=True)
     st.caption("Holiday dates are observed when they fall on a weekend.")
 
-# ----------------------
-# Protocol loader (fixed labels)
-# ----------------------
+# ---------- Protocol loader (fixed labels) ----------
 def list_protocol_csvs():
     protodir = Path(__file__).parent / "protocols"
     mapping = {
@@ -171,8 +167,7 @@ def list_protocol_csvs():
         "ATAI": protodir / "ATAI.csv",
         "Reunion ADCO": protodir / "Reunion_ADCO.csv",
     }
-    existing = {label: path for label, path in mapping.items() if path.exists()}
-    return existing
+    return {label: p for label, p in mapping.items() if p.exists()}
 
 def load_protocol(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
@@ -184,12 +179,16 @@ def load_protocol(path: Path) -> pd.DataFrame:
         df["Visit Name"] = [f"Visit {i+1}" for i in range(len(df))]
     for c in REQUIRED_COLS:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+    # Add optional columns (empty) so editors show them:
+    if "Start Time" not in df.columns:
+        df["Start Time"] = ""
+    if "Visit Duration (min)" not in df.columns:
+        df["Visit Duration (min)"] = ""
     return df
 
 protocols = list_protocol_csvs()
 if not protocols:
-    st.error("No protocols found. Ensure these files exist: "
-             "`protocols/IGC.csv`, `protocols/ATAI.csv`, `protocols/Reunion_ADCO.csv` (at least one).")
+    st.error("No protocols found. Ensure at least one of: `protocols/IGC.csv`, `protocols/ATAI.csv`, `protocols/Reunion_ADCO.csv`.")
     st.stop()
 
 proto_name = st.selectbox("📄 Choose protocol", list(protocols.keys()))
@@ -199,9 +198,7 @@ except Exception as e:
     st.error(f"Error loading protocol: {e}")
     st.stop()
 
-# ----------------------
-# Patients (single or batch)
-# ----------------------
+# ---------- Patients ----------
 st.markdown("## 👤 Patients")
 mode = st.radio("Mode", options=["Single", "Batch"], horizontal=True)
 
@@ -232,31 +229,21 @@ else:
     batch_df = batch_df[batch_df["Patient ID"] != ""]
     ready = len(batch_df) > 0
 
-# ----------------------
-# Blackouts & constraints (pre-typed datetime column for editor)
-# ----------------------
+# ---------- Blackouts ----------
 st.markdown("## 🚫 Blackouts & Constraints")
 cA, cB = st.columns([1, 1])
 
 with cA:
     st.markdown("**Custom blackout dates**")
     st.caption("Add dates the site or participant cannot attend.")
-
-    blackout_seed = pd.DataFrame({
-        "Blackout Date": pd.Series([], dtype="datetime64[ns]")
-    })
-
+    blackout_seed = pd.DataFrame({"Blackout Date": pd.Series([], dtype="datetime64[ns]")})
     blackout_df = st.data_editor(
         blackout_seed,
         num_rows="dynamic",
         use_container_width=True,
-        column_config={
-            "Blackout Date": st.column_config.DateColumn()
-        },
+        column_config={"Blackout Date": st.column_config.DateColumn()},
         key="blackouts_editor"
-    )
-
-    blackout_df = blackout_df.dropna(subset=["Blackout Date"])
+    ).dropna(subset=["Blackout Date"])
 
 with cB:
     st.markdown("**Notes**")
@@ -266,13 +253,9 @@ with cB:
     else:
         st.info("Use per-patient notes outside the app if needed (batch mode).")
 
-custom_blackouts = set(
-    d.date() for d in pd.to_datetime(blackout_df["Blackout Date"]).dropna().tolist()
-)
+custom_blackouts = set(d.date() for d in pd.to_datetime(blackout_df["Blackout Date"]).dropna().tolist())
 
-# ----------------------
-# Core compute
-# ----------------------
+# ---------- Core compute ----------
 def compute_visits_for_patient(anchor: date):
     min_day = int(schedule["Day From Baseline"].min() - schedule["Window Minus"].max() - 7)
     max_day = int(schedule["Day From Baseline"].max() + schedule["Window Plus"].max() + 7)
@@ -297,52 +280,61 @@ def compute_visits_for_patient(anchor: date):
         )
         chosen.append(ch)
     out["Chosen Date"] = chosen
+    # ensure optional columns exist
+    if "Start Time" not in out.columns: out["Start Time"] = ""
+    if "Visit Duration (min)" not in out.columns: out["Visit Duration (min)"] = ""
     return out
 
 def _coerce_to_date_cols(df, cols):
-    """Coerce any of the given columns to datetime (if needed), then to plain date objects."""
     for c in cols:
         df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
     return df
 
-def _annotate_status(df):
-    """Add Status column: ✅ In window / 🔴 Out of window / ⏳ Not set"""
+def _annotate_status_and_flag(df):
+    """Add Status + red dot flag next to Chosen Date (new '⚠' column)."""
     def status_row(r):
         cd = r.get("Chosen Date")
-        if cd is None or pd.isna(cd):
-            return "⏳ Not set"
         e, l = r.get("Earliest"), r.get("Latest")
-        try:
-            cd = _to_date(cd); e = _to_date(e); l = _to_date(l)
-        except Exception:
-            return "⏳ Not set"
+        cd, e, l = _to_date(cd), _to_date(e), _to_date(l)
         if cd is None or e is None or l is None:
-            return "⏳ Not set"
-        return "✅ In window" if (e <= cd <= l) else "🔴 Out of window"
+            return "⏳ Not set", ""
+        if e <= cd <= l:
+            return "✅ In window", ""
+        else:
+            return "🔴 Out of window", "🔴"
 
     df = df.copy()
-    df["Status"] = df.apply(status_row, axis=1)
-    any_out = (df["Status"] == "🔴 Out of window").any()
-    return df, any_out
+    statuses, flags = [], []
+    for _, r in df.iterrows():
+        s, f = status_row(r)
+        statuses.append(s); flags.append(f)
+    df["Status"] = statuses
+    # place flag just before Chosen Date
+    df.insert(df.columns.get_loc("Chosen Date"), "⚠", flags)
+    return df, any(s == "🔴 Out of window" for s in statuses)
 
-# ----------------------
-# Schedule & adjust
-# ----------------------
+def _format_mmddyyyy(df, cols):
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce").dt.strftime("%m/%d/%Y")
+    return df
+
+# ---------- Schedule & adjust ----------
 if ready:
     st.markdown("## 📅 Schedule & Adjust")
 
-    # Inline help above the editor
     st.info(
         "How to choose a date:\n"
         "1) Click the **Chosen Date** cell for a visit.\n"
-        "2) Pick a date from the calendar popup.\n"
-        "3) Dates outside the window are marked **🔴 Out of window** below."
+        "2) Pick a date from the calendar popup (mm/dd/yyyy).\n"
+        "3) A red dot **🔴** next to the date means it is **out of window**."
     )
 
     if mode == "Single":
         visits = compute_visits_for_patient(anchor_date)
         table = _coerce_to_date_cols(visits.copy(), ["Target Date", "Earliest", "Latest", "Chosen Date"])
-        # editor
+        # Editable columns include optional Start Time and Visit Duration
         table = st.data_editor(
             table,
             use_container_width=True,
@@ -355,15 +347,15 @@ if ready:
                 "Target Date": st.column_config.DateColumn(disabled=True),
                 "Earliest": st.column_config.DateColumn(disabled=True),
                 "Latest": st.column_config.DateColumn(disabled=True),
-                "Chosen Date": st.column_config.DateColumn(help="Pick the actual appointment date"),
+                "Chosen Date": st.column_config.DateColumn(help="Pick the appointment date"),
+                "Start Time": st.column_config.TextColumn(help="Optional, e.g., 09:00 or 9:00 AM"),
+                "Visit Duration (min)": st.column_config.NumberColumn(help="Optional, e.g., 60"),
             },
             key="single_visits_editor"
         )
-        # annotate status after user edits
-        table_with_status, any_out = _annotate_status(table)
+        table_with_status, any_out = _annotate_status_and_flag(table)
         if any_out:
-            st.warning("Some visits are **out of window** (marked 🔴). Please adjust Chosen Date to fall between Earliest and Latest.")
-
+            st.warning("Some visits are **out of window** (🔴). Please adjust Chosen Date between Earliest and Latest.")
         st.session_state["single_result"] = {
             "patient_id": patient_id,
             "anchor_date": anchor_date,
@@ -382,7 +374,6 @@ if ready:
             v["Anchor Date"] = ad
             rows.append(v)
         batch_table = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
-
         batch_table = st.data_editor(
             batch_table,
             use_container_width=True,
@@ -398,124 +389,148 @@ if ready:
                 "Earliest": st.column_config.DateColumn(disabled=True),
                 "Latest": st.column_config.DateColumn(disabled=True),
                 "Chosen Date": st.column_config.DateColumn(),
+                "Start Time": st.column_config.TextColumn(help="Optional, e.g., 09:00 or 9:00 AM"),
+                "Visit Duration (min)": st.column_config.NumberColumn(help="Optional, e.g., 60"),
             },
             key="batch_visits_editor"
         )
-        batch_with_status, any_out = _annotate_status(batch_table)
+        batch_with_status, any_out = _annotate_status_and_flag(batch_table)
         if any_out:
-            st.warning("Some visits are **out of window** (marked 🔴). Please adjust Chosen Date to fall between Earliest and Latest.")
+            st.warning("Some visits are **out of window** (🔴). Please adjust Chosen Date between Earliest and Latest.")
         st.session_state["batch_result"] = batch_with_status.copy()
 
-# ----------------------
-# Export & print
-# ----------------------
+# ---------- Export & print ----------
 st.markdown("## 🖨️ Export & Print")
 role = st.radio("Role", ["Coordinator view", "Participant handout"], horizontal=True)
 
 def coordinator_view(df, include_patient=True):
-    # Include Status for coordinators
-    cols = ["Visit Name", "Day From Baseline", "Target Date", "Earliest", "Latest", "Chosen Date", "Status", "Window Minus", "Window Plus"]
+    cols = ["Visit Name", "Day From Baseline", "Target Date", "Earliest", "Latest", "⚠", "Chosen Date",
+            "Status", "Window Minus", "Window Plus", "Start Time", "Visit Duration (min)"]
     out = df.copy()
     if include_patient and "Patient ID" in out.columns:
         cols = ["Patient ID", "Anchor Date"] + cols
-    return out[[c for c in cols if c in out.columns]]
+    out = out[[c for c in cols if c in out.columns]].copy()
+    # Format dates as mm/dd/yyyy for preview
+    out = _format_mmddyyyy(out, ["Anchor Date", "Target Date", "Earliest", "Latest", "Chosen Date"])
+    return out
 
 def participant_view(df, include_patient=False):
-    # Hide internal columns & Status for participant handouts
-    cols = ["Visit Name", "Chosen Date", "Earliest", "Latest"]
+    # Only Visit Name + Chosen Date (as requested)
+    cols = ["Visit Name", "Chosen Date"]
     out = df.copy()
     if include_patient and "Patient ID" in out.columns:
         cols = ["Patient ID"] + cols
-    return out[[c for c in cols if c in out.columns]]
+    out = out[[c for c in cols if c in out.columns]].copy()
+    out = _format_mmddyyyy(out, ["Chosen Date"])
+    return out
 
 left, right = st.columns([2, 1])
 
 with left:
-    if mode == "Single" and "single_result" in st.session_state:
-        res = st.session_state["single_result"]
-        df = res["df"].copy()
-        table = coordinator_view(df, include_patient=False) if role == "Coordinator view" else participant_view(df, include_patient=False)
-        st.dataframe(table, use_container_width=True)
-
-        # CSV
-        csv_bytes = table.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download CSV",
-            data=csv_bytes,
-            file_name=f"{res['patient_id']}_{role.replace(' ','_')}.csv",
-            mime="text/csv"
-        )
-        # Excel
-        xbuf = io.BytesIO()
-        with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
-            table.to_excel(writer, index=False, sheet_name="Schedule")
-        st.download_button(
-            "⬇️ Download Excel",
-            data=xbuf.getvalue(),
-            file_name=f"{res['patient_id']}_{role.replace(' ','_')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # ICS from Chosen Dates
-        events = []
-        for _, r in df.iterrows():
-            cd = _to_date(r.get("Chosen Date"))
-            if not cd:
-                continue
-            summary = f"{r.get('Visit Name','Visit')}"
-            if role == "Coordinator view":
-                summary = f"{res['patient_id']} · {summary}"
-            desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
-            events.append({"summary": summary, "date": cd, "description": desc})
-        if events:
-            ics_data = make_ics(events, cal_name=f"{proto_name} - {res['patient_id']}")
-            st.download_button("📅 Export to Outlook calendar", data=ics_data, file_name=f"{res['patient_id']}_schedule.ics", mime="text/calendar")
-        else:
-            st.info("Set at least one **Chosen Date** to enable calendar export.")
-
-    elif mode == "Batch" and "batch_result" in st.session_state:
-        df = st.session_state["batch_result"].copy()
-        if df.empty:
-            st.info("Add patients in the table above.")
-        else:
-            table = coordinator_view(df, include_patient=True) if role == "Coordinator view" else participant_view(df, include_patient=True)
+    if role == "Coordinator view":
+        if "single_result" in st.session_state and (mode == "Single"):
+            res = st.session_state["single_result"]; df = res["df"].copy()
+            table = coordinator_view(df, include_patient=False)
             st.dataframe(table, use_container_width=True)
-
-            # CSV / Excel
-            csv_bytes = table.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Download CSV (All Patients)", data=csv_bytes, file_name=f"batch_{role.replace(' ','_')}.csv", mime="text/csv")
-
+            # CSV
+            st.download_button("⬇️ Download CSV", data=table.to_csv(index=False).encode("utf-8"),
+                               file_name=f"{res['patient_id']}_coordinator.csv", mime="text/csv")
+            # Excel
             xbuf = io.BytesIO()
             with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
-                table.to_excel(writer, index=False, sheet_name="Schedules")
-            st.download_button("⬇️ Download Excel (All Patients)", data=xbuf.getvalue(), file_name=f"batch_{role.replace(' ','_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                table.to_excel(writer, index=False, sheet_name="Schedule")
+            st.download_button("⬇️ Download Excel", data=xbuf.getvalue(),
+                               file_name=f"{res['patient_id']}_coordinator.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            # ZIP of per-patient ICS
-            patients = sorted(df["Patient ID"].unique())
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for pid in patients:
-                    sub = df[df["Patient ID"] == pid].copy()
-                    events = []
-                    for _, r in sub.iterrows():
-                        cd = _to_date(r.get("Chosen Date"))
-                        if not cd:
-                            continue
-                        summary = f"{r.get('Visit Name','Visit')}"
-                        if role == "Coordinator view":
-                            summary = f"{pid} · {summary}"
-                        desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
-                        events.append({"summary": summary, "date": cd, "description": desc})
-                    if events:
-                        ics_bytes = make_ics(events, cal_name=f"{proto_name} - {pid}")
-                        zf.writestr(f"{pid}_schedule.ics", ics_bytes)
-            if zip_buf.getbuffer().nbytes > 0:
-                st.download_button("📦 Export Outlook calendars (ZIP per patient)", data=zip_buf.getvalue(), file_name="batch_schedules_ics.zip", mime="application/zip")
+            # Outlook ICS
+            events = []
+            for _, r in df.iterrows():
+                cd = _to_date(r.get("Chosen Date"))
+                if not cd: continue
+                start_t = _to_time(r.get("Start Time"))
+                dur = r.get("Visit Duration (min)")
+                dur = int(dur) if (str(dur).strip().isdigit()) else None
+                summary = f"{res['patient_id']} · {r.get('Visit Name','Visit')}"
+                desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
+                events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
+            if events:
+                ics_data = make_ics(events, cal_name=f"{proto_name} - {res['patient_id']}")
+                st.download_button("📅 Export to Outlook calendar", data=ics_data,
+                                   file_name=f"{res['patient_id']}_schedule.ics", mime="text/calendar")
             else:
-                st.info("Set **Chosen Date** for at least one row to enable calendar ZIP export.")
+                st.info("Set at least one **Chosen Date** to enable calendar export.")
+
+        elif "batch_result" in st.session_state and (mode == "Batch"):
+            df = st.session_state["batch_result"].copy()
+            if df.empty:
+                st.info("Add patients in the table above.")
+            else:
+                table = coordinator_view(df, include_patient=True)
+                st.dataframe(table, use_container_width=True)
+                # CSV / Excel
+                st.download_button("⬇️ Download CSV (All Patients)", data=table.to_csv(index=False).encode("utf-8"),
+                                   file_name=f"batch_coordinator.csv", mime="text/csv")
+                xbuf = io.BytesIO()
+                with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
+                    table.to_excel(writer, index=False, sheet_name="Schedules")
+                st.download_button("⬇️ Download Excel (All Patients)", data=xbuf.getvalue(),
+                                   file_name=f"batch_coordinator.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # ZIP of ICS per patient
+                patients = sorted(df["Patient ID"].unique())
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for pid in patients:
+                        sub = df[df["Patient ID"] == pid].copy()
+                        events = []
+                        for _, r in sub.iterrows():
+                            cd = _to_date(r.get("Chosen Date"))
+                            if not cd: continue
+                            start_t = _to_time(r.get("Start Time"))
+                            dur = r.get("Visit Duration (min)")
+                            dur = int(dur) if (str(dur).strip().isdigit()) else None
+                            summary = f"{pid} · {r.get('Visit Name','Visit')}"
+                            desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
+                            events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
+                        if events:
+                            ics_bytes = make_ics(events, cal_name=f"{proto_name} - {pid}")
+                            zf.writestr(f"{pid}_schedule.ics", ics_bytes)
+                if zip_buf.getbuffer().nbytes > 0:
+                    st.download_button("📦 Export Outlook calendars (ZIP per patient)", data=zip_buf.getvalue(),
+                                       file_name="batch_schedules_ics.zip", mime="application/zip")
+                else:
+                    st.info("Set **Chosen Date** for at least one row to enable calendar ZIP export.")
+
+    else:  # Participant handout
+        if "single_result" in st.session_state and (mode == "Single"):
+            res = st.session_state["single_result"]; df = res["df"].copy()
+            table = participant_view(df, include_patient=False)
+            st.dataframe(table, use_container_width=True)
+            # Excel (Visit Name + Chosen Date only)
+            xbuf = io.BytesIO()
+            with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
+                table.to_excel(writer, index=False, sheet_name="Participant Handout")
+            st.download_button("⬇️ Download Participant Handout (Excel)", data=xbuf.getvalue(),
+                               file_name=f"{res['patient_id']}_participant.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        elif "batch_result" in st.session_state and (mode == "Batch"):
+            df = st.session_state["batch_result"].copy()
+            if df.empty:
+                st.info("Add patients in the table above.")
+            else:
+                table = participant_view(df, include_patient=True)
+                st.dataframe(table, use_container_width=True)
+                xbuf = io.BytesIO()
+                with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
+                    table.to_excel(writer, index=False, sheet_name="Participant Handouts")
+                st.download_button("⬇️ Download Participant Handouts (Excel, All Patients)", data=xbuf.getvalue(),
+                                   file_name="batch_participant.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 with right:
-    st.markdown("### 🧾 Print Tips")
-    st.write("- Use **Participant handout** to hide internal fields.")
-    st.write("- Then use your browser’s **Print** (Ctrl/Cmd + P).")
-    st.write("- Calendar export uses your **Chosen Dates**.")
+    st.markdown("### 🧾 Tips")
+    st.write("- **Red dot (🔴)** next to a date means it’s **out of window**.")
+    st.write("- For Outlook export, you can optionally enter **Start Time** (e.g., 09:00 or 9:00 AM) and **Visit Duration (min)**.")
+    st.write("- All dates display/export as **mm/dd/yyyy**.")
