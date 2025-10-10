@@ -1,4 +1,6 @@
 # visit_scheduler.py — fixed labels (IGC / ATAI / Reunion ADCO), no duration column
+# Adds: in-window validation with Status, warning banner, Outlook wording, on-screen instructions
+
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta, time as dtime
@@ -283,7 +285,6 @@ def compute_visits_for_patient(anchor: date):
     out["Earliest"]    = out["Target Date"] - pd.to_timedelta(out["Window Minus"], unit="D")
     out["Latest"]      = out["Target Date"] + pd.to_timedelta(out["Window Plus"], unit="D")
 
-    # Suggest chosen date
     chosen = []
     for _, r in out.iterrows():
         ch = nearest_allowed_date(
@@ -304,18 +305,44 @@ def _coerce_to_date_cols(df, cols):
         df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
     return df
 
+def _annotate_status(df):
+    """Add Status column: ✅ In window / 🔴 Out of window / ⏳ Not set"""
+    def status_row(r):
+        cd = r.get("Chosen Date")
+        if cd is None or pd.isna(cd):
+            return "⏳ Not set"
+        e, l = r.get("Earliest"), r.get("Latest")
+        try:
+            cd = _to_date(cd); e = _to_date(e); l = _to_date(l)
+        except Exception:
+            return "⏳ Not set"
+        if cd is None or e is None or l is None:
+            return "⏳ Not set"
+        return "✅ In window" if (e <= cd <= l) else "🔴 Out of window"
+
+    df = df.copy()
+    df["Status"] = df.apply(status_row, axis=1)
+    any_out = (df["Status"] == "🔴 Out of window").any()
+    return df, any_out
+
 # ----------------------
 # Schedule & adjust
 # ----------------------
 if ready:
     st.markdown("## 📅 Schedule & Adjust")
 
+    # Inline help above the editor
+    st.info(
+        "How to choose a date:\n"
+        "1) Click the **Chosen Date** cell for a visit.\n"
+        "2) Pick a date from the calendar popup.\n"
+        "3) Dates outside the window are marked **🔴 Out of window** below."
+    )
+
     if mode == "Single":
         visits = compute_visits_for_patient(anchor_date)
-        table = visits.copy()
-        table = _coerce_to_date_cols(table, ["Target Date", "Earliest", "Latest", "Chosen Date"])
-
-        st.caption("Edit **Chosen Date**. Suggested dates avoid weekends/US holidays/blackouts when possible; overrides are allowed.")
+        table = _coerce_to_date_cols(visits.copy(), ["Target Date", "Earliest", "Latest", "Chosen Date"])
+        # editor
         table = st.data_editor(
             table,
             use_container_width=True,
@@ -328,15 +355,20 @@ if ready:
                 "Target Date": st.column_config.DateColumn(disabled=True),
                 "Earliest": st.column_config.DateColumn(disabled=True),
                 "Latest": st.column_config.DateColumn(disabled=True),
-                "Chosen Date": st.column_config.DateColumn(help="Pick the actual appointment date (ideally within window)"),
+                "Chosen Date": st.column_config.DateColumn(help="Pick the actual appointment date"),
             },
             key="single_visits_editor"
         )
+        # annotate status after user edits
+        table_with_status, any_out = _annotate_status(table)
+        if any_out:
+            st.warning("Some visits are **out of window** (marked 🔴). Please adjust Chosen Date to fall between Earliest and Latest.")
+
         st.session_state["single_result"] = {
             "patient_id": patient_id,
             "anchor_date": anchor_date,
             "notes": (st.session_state.get("notes_text") or ""),
-            "df": table.copy()
+            "df": table_with_status.copy()
         }
 
     else:
@@ -351,7 +383,6 @@ if ready:
             rows.append(v)
         batch_table = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
-        st.caption("You can sort/filter and edit **Chosen Date** per visit.")
         batch_table = st.data_editor(
             batch_table,
             use_container_width=True,
@@ -370,7 +401,10 @@ if ready:
             },
             key="batch_visits_editor"
         )
-        st.session_state["batch_result"] = batch_table.copy()
+        batch_with_status, any_out = _annotate_status(batch_table)
+        if any_out:
+            st.warning("Some visits are **out of window** (marked 🔴). Please adjust Chosen Date to fall between Earliest and Latest.")
+        st.session_state["batch_result"] = batch_with_status.copy()
 
 # ----------------------
 # Export & print
@@ -379,13 +413,15 @@ st.markdown("## 🖨️ Export & Print")
 role = st.radio("Role", ["Coordinator view", "Participant handout"], horizontal=True)
 
 def coordinator_view(df, include_patient=True):
-    cols = ["Visit Name", "Day From Baseline", "Target Date", "Earliest", "Latest", "Chosen Date", "Window Minus", "Window Plus"]
+    # Include Status for coordinators
+    cols = ["Visit Name", "Day From Baseline", "Target Date", "Earliest", "Latest", "Chosen Date", "Status", "Window Minus", "Window Plus"]
     out = df.copy()
     if include_patient and "Patient ID" in out.columns:
         cols = ["Patient ID", "Anchor Date"] + cols
     return out[[c for c in cols if c in out.columns]]
 
 def participant_view(df, include_patient=False):
+    # Hide internal columns & Status for participant handouts
     cols = ["Visit Name", "Chosen Date", "Earliest", "Latest"]
     out = df.copy()
     if include_patient and "Patient ID" in out.columns:
@@ -433,7 +469,7 @@ with left:
             events.append({"summary": summary, "date": cd, "description": desc})
         if events:
             ics_data = make_ics(events, cal_name=f"{proto_name} - {res['patient_id']}")
-            st.download_button("📅 Download .ics (Chosen Dates)", data=ics_data, file_name=f"{res['patient_id']}_schedule.ics", mime="text/calendar")
+            st.download_button("📅 Export to Outlook calendar", data=ics_data, file_name=f"{res['patient_id']}_schedule.ics", mime="text/calendar")
         else:
             st.info("Set at least one **Chosen Date** to enable calendar export.")
 
@@ -474,7 +510,7 @@ with left:
                         ics_bytes = make_ics(events, cal_name=f"{proto_name} - {pid}")
                         zf.writestr(f"{pid}_schedule.ics", ics_bytes)
             if zip_buf.getbuffer().nbytes > 0:
-                st.download_button("📦 Download .ics (ZIP per patient)", data=zip_buf.getvalue(), file_name="batch_schedules_ics.zip", mime="application/zip")
+                st.download_button("📦 Export Outlook calendars (ZIP per patient)", data=zip_buf.getvalue(), file_name="batch_schedules_ics.zip", mime="application/zip")
             else:
                 st.info("Set **Chosen Date** for at least one row to enable calendar ZIP export.")
 
@@ -483,5 +519,3 @@ with right:
     st.write("- Use **Participant handout** to hide internal fields.")
     st.write("- Then use your browser’s **Print** (Ctrl/Cmd + P).")
     st.write("- Calendar export uses your **Chosen Dates**.")
-
-
