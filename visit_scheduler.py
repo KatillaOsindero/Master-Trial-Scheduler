@@ -232,20 +232,33 @@ else:
     ready = len(batch_df) > 0
 
 # ----------------------
-# Blackouts & constraints
+# Blackouts & constraints (FIXED: pre-typed datetime column for editor)
 # ----------------------
 st.markdown("## 🚫 Blackouts & Constraints")
 cA, cB = st.columns([1, 1])
+
 with cA:
     st.markdown("**Custom blackout dates**")
     st.caption("Add dates the site or participant cannot attend.")
+
+    # Seed with a real datetime64[ns] dtype so DateColumn works even when empty
+    blackout_seed = pd.DataFrame({
+        "Blackout Date": pd.Series([], dtype="datetime64[ns]")
+    })
+
     blackout_df = st.data_editor(
-        pd.DataFrame({"Blackout Date": []}),
+        blackout_seed,
         num_rows="dynamic",
         use_container_width=True,
-        column_config={"Blackout Date": st.column_config.DateColumn()},
+        column_config={
+            "Blackout Date": st.column_config.DateColumn()
+        },
         key="blackouts_editor"
     )
+
+    # Clean NA rows
+    blackout_df = blackout_df.dropna(subset=["Blackout Date"])
+
 with cB:
     st.markdown("**Notes**")
     st.caption("Optional scheduling context.")
@@ -254,7 +267,10 @@ with cB:
     else:
         st.info("Use per-patient notes outside the app if needed (batch mode).")
 
-custom_blackouts = set([_to_date(x) for x in blackout_df["Blackout Date"].tolist() if _to_date(x)])
+# Build blackout set safely (dates only)
+custom_blackouts = set(
+    d.date() for d in pd.to_datetime(blackout_df["Blackout Date"]).dropna().tolist()
+)
 
 # ----------------------
 # Core compute
@@ -439,7 +455,7 @@ with left:
             # ZIP of per-patient ICS
             patients = sorted(df["Patient ID"].unique())
             zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(zip_buf, "w", zipfile.Zip_DEFLATED) as zf:
                 for pid in patients:
                     sub = df[df["Patient ID"] == pid].copy()
                     events = []
@@ -465,3 +481,6 @@ with right:
     st.write("- Use **Participant handout** to hide internal fields.")
     st.write("- Then use your browser’s **Print** (Ctrl/Cmd + P).")
     st.write("- Calendar export uses your **Chosen Dates**.")
+
+    st.write("- Calendar export uses your **Chosen Dates**.")
+
