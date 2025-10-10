@@ -1,16 +1,17 @@
-Visit Name,Day From Baseline,Window Minus,Window Plus
-Screening V1a,-6,0,0
-Baseline V2,0,1,0
-Administration V3,1,0,0
-Safety Follow Up V4,2,0,1
-Safety Follow Up V5,8,3,3
-Administration V6,15,2,2
-Safety Follow Up V7,16,1,1
-Safety Follow Up V8,22,3,3
-Safety Follow Up V9,29,3,3
-Safety Follow Up V10,43,3,3
-Safety Follow Up V11,71,3,3
-Administration V12,99,7,7
-Safety Follow Up V13,100,3,3
-Safety Follow Up V14,106,3,3
-Safety Follow Up V15,113,7,7
+Visit Name,Day From Baseline,Window Minus,Window Plus, Protocol Version
+Screening V1a,-6,0,0,v3.0 03 FEB 2025
+Baseline V2,0,1,0,v3.0 03 FEB 2025
+Administration V3,1,0,0,v3.0 03 FEB 2025
+Safety Follow Up V4,2,0,1,v3.0 03 FEB 2025
+Safety Follow Up V5,8,3,3,v3.0 03 FEB 2025
+Administration V6,15,2,2,v3.0 03 FEB 2025
+Safety Follow Up V7,16,1,1,v3.0 03 FEB 2025
+Safety Follow Up V8,22,3,3,v3.0 03 FEB 2025
+Safety Follow Up V9,29,3,3,v3.0 03 FEB 2025
+Safety Follow Up V10,43,3,3,v3.0 03 FEB 2025
+Safety Follow Up V11,71,3,3,v3.0 03 FEB 2025
+Administration V12,99,7,7,v3.0 03 FEB 2025
+Safety Follow Up V13,100,3,3,v3.0 03 FEB 2025
+Safety Follow Up V14,106,3,3,v3.0 03 FEB 2025
+Safety Follow Up V15,113,7,7,v3.0 03 FEB 2025
+
