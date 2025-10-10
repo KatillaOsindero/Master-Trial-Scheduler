@@ -1,22 +1,23 @@
 Visit Name,Day From Baseline,Window Minus,Window Plus, Protocol Version
-Prescreening,-8,2,2,v5.0 15MAY2025
-Baseline D0,-1,0,0,v5.0 15MAY2025
-Randomization D1,0,0,0,v5.0 15MAY2025
-Safety Call D2,1,1,1,v5.0 15MAY2025
-Safety Call D3,2,1,1,v5.0 15MAY2025
-Safety Call D4,3,1,1,v5.0 15MAY2025
-Safety Call D7,6,1,1,v5.0 15MAY2025
-Safety Call D10,9,1,1,v5.0 15MAY2025
-Safety and Scales In Clinic D14,13,1,1,v5.0 15MAY2025
-Safety Call D17,15,1,1,v5.0 15MAY2025
-Safety Call D20,19,1,1,v5.0 15MAY2025
-Safety Call D23,22,1,1,v5.0 15MAY2025
-Safety Call D26,25,1,1,v5.0 15MAY2025
-Safety and Scales Video Call or In Clinic D28,27,1,1,v5.0 15MAY2025
-Safety Call D31,30,1,1,v5.0 15MAY2025
-Safety Call D34,33,1,1,v5.0 15MAY2025
-Safety Call D37,36,1,1,v5.0 15MAY2025
-Safety Call D40,39,1,1,v5.0 15MAY2025
-EOT In Clinic D42,41,1,1,v5.0 15MAY2025
-Safety Follow Up Call EOT ,45,1,1,v5.0 15MAY2025
+Prescreening,-8,2,2,v5.0 13FEB2024
+Baseline D0,-1,0,0,v5.0 13FEB2024
+Randomization D1,0,0,0,v5.0 13FEB2024
+Safety Call D2,1,1,1,v5.0 13FEB2024
+Safety Call D3,2,1,1,v5.0 13FEB2024
+Safety Call D4,3,1,1,v5.0 13FEB2024
+Safety Call D7,6,1,1,v5.0 13FEB2024
+Safety Call D10,9,1,1,v5.0 13FEB2024
+Safety and Scales In Clinic D14,13,1,1,v5.0 13FEB2024
+Safety Call D17,15,1,1,v5.0 13FEB2024
+Safety Call D20,19,1,1,v5.0 13FEB2024
+Safety Call D23,22,1,1,v5.0 13FEB2024
+Safety Call D26,25,1,1,v5.0 13FEB2024
+Safety and Scales Video Call or In Clinic D28,27,1,1,v5.0 13FEB2024
+Safety Call D31,30,1,1,v5.0 13FEB2024
+Safety Call D34,33,1,1,v5.0 13FEB2024
+Safety Call D37,36,1,1,v5.0 13FEB2024
+Safety Call D40,39,1,1,v5.0 13FEB2024
+EOT In Clinic D42,41,1,1,v5.0 13FEB2024
+Safety Follow Up Call EOT ,45,1,1,v5.0 13FEB2024
+
 
