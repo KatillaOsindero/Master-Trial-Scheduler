@@ -1,10 +1,11 @@
-﻿Visit Name ,Day From Baseline,Window Minus,Window Plus
-Screening V1,-28,0,23
-Screening V2,-4,0,3
-Dosing V3,0,0,0
-V4 remote,1,0,0
-V5 remote,4,1,1
-V6 ,7,1,1
-V7 ,14,2,2
-V8,28,3,3
-V9 EOS ,42,3,3
+﻿Visit Name ,Day From Baseline,Window Minus,Window Plus,Protocol Version
+Screening V1,-28,0,23,v3.0 15MAY2025
+Screening V2,-4,0,3,v3.0 15MAY2025
+Dosing V3,0,0,0,v3.0 15MAY2025
+V4 remote,1,0,0,v3.0 15MAY2025
+V5 remote,4,1,1,v3.0 15MAY2025
+V6 ,7,1,1,v3.0 15MAY2025
+V7 ,14,2,2,v3.0 15MAY2025
+V8,28,3,3,v3.0 15MAY2025
+V9 EOS ,42,3,3,v3.0 15MAY2025
+
