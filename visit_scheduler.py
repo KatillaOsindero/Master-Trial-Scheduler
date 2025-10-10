@@ -169,7 +169,6 @@ def list_protocol_csvs():
         "ATAI": protodir / "ATAI.csv",
         "Reunion ADCO": protodir / "Reunion_ADCO.csv",
     }
-    # Only include files that actually exist
     existing = {label: path for label, path in mapping.items() if path.exists()}
     return existing
 
@@ -232,7 +231,7 @@ else:
     ready = len(batch_df) > 0
 
 # ----------------------
-# Blackouts & constraints (FIXED: pre-typed datetime column for editor)
+# Blackouts & constraints (pre-typed datetime column for editor)
 # ----------------------
 st.markdown("## 🚫 Blackouts & Constraints")
 cA, cB = st.columns([1, 1])
@@ -241,7 +240,6 @@ with cA:
     st.markdown("**Custom blackout dates**")
     st.caption("Add dates the site or participant cannot attend.")
 
-    # Seed with a real datetime64[ns] dtype so DateColumn works even when empty
     blackout_seed = pd.DataFrame({
         "Blackout Date": pd.Series([], dtype="datetime64[ns]")
     })
@@ -256,7 +254,6 @@ with cA:
         key="blackouts_editor"
     )
 
-    # Clean NA rows
     blackout_df = blackout_df.dropna(subset=["Blackout Date"])
 
 with cB:
@@ -267,7 +264,6 @@ with cB:
     else:
         st.info("Use per-patient notes outside the app if needed (batch mode).")
 
-# Build blackout set safely (dates only)
 custom_blackouts = set(
     d.date() for d in pd.to_datetime(blackout_df["Blackout Date"]).dropna().tolist()
 )
@@ -287,6 +283,7 @@ def compute_visits_for_patient(anchor: date):
     out["Earliest"]    = out["Target Date"] - pd.to_timedelta(out["Window Minus"], unit="D")
     out["Latest"]      = out["Target Date"] + pd.to_timedelta(out["Window Plus"], unit="D")
 
+    # Suggest chosen date
     chosen = []
     for _, r in out.iterrows():
         ch = nearest_allowed_date(
@@ -301,6 +298,12 @@ def compute_visits_for_patient(anchor: date):
     out["Chosen Date"] = chosen
     return out
 
+def _coerce_to_date_cols(df, cols):
+    """Coerce any of the given columns to datetime (if needed), then to plain date objects."""
+    for c in cols:
+        df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
+    return df
+
 # ----------------------
 # Schedule & adjust
 # ----------------------
@@ -310,8 +313,8 @@ if ready:
     if mode == "Single":
         visits = compute_visits_for_patient(anchor_date)
         table = visits.copy()
-        for c in ["Target Date", "Earliest", "Latest", "Chosen Date"]:
-            table[c] = table[c].dt.date
+        table = _coerce_to_date_cols(table, ["Target Date", "Earliest", "Latest", "Chosen Date"])
+
         st.caption("Edit **Chosen Date**. Suggested dates avoid weekends/US holidays/blackouts when possible; overrides are allowed.")
         table = st.data_editor(
             table,
@@ -342,12 +345,12 @@ if ready:
             pid = str(r["Patient ID"]).strip()
             ad = r["Anchor Date"]
             v = compute_visits_for_patient(ad).copy()
-            for c in ["Target Date", "Earliest", "Latest", "Chosen Date"]:
-                v[c] = v[c].dt.date
+            v = _coerce_to_date_cols(v, ["Target Date", "Earliest", "Latest", "Chosen Date"])
             v["Patient ID"] = pid
             v["Anchor Date"] = ad
             rows.append(v)
         batch_table = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
         st.caption("You can sort/filter and edit **Chosen Date** per visit.")
         batch_table = st.data_editor(
             batch_table,
@@ -427,7 +430,6 @@ with left:
             if role == "Coordinator view":
                 summary = f"{res['patient_id']} · {summary}"
             desc = f"{proto_name} — Window {r.get('Earliest')} to {r.get('Latest')}"
-            # duration hidden from UI; default to 60 minutes internally
             events.append({"summary": summary, "date": cd, "description": desc})
         if events:
             ics_data = make_ics(events, cal_name=f"{proto_name} - {res['patient_id']}")
@@ -455,7 +457,7 @@ with left:
             # ZIP of per-patient ICS
             patients = sorted(df["Patient ID"].unique())
             zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", zipfile.Zip_DEFLATED) as zf:
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for pid in patients:
                     sub = df[df["Patient ID"] == pid].copy()
                     events = []
@@ -482,5 +484,4 @@ with right:
     st.write("- Then use your browser’s **Print** (Ctrl/Cmd + P).")
     st.write("- Calendar export uses your **Chosen Dates**.")
 
-    st.write("- Calendar export uses your **Chosen Dates**.")
 
