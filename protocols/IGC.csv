@@ -1,4 +1,4 @@
-Visit Name,Day From Baseline,Window Minus,Window Plus, Protocol Version
+Visit Name,Day From Baseline,Window Minus,Window Plus,Protocol Version
 Prescreening,-8,2,2,v5.0 13FEB2024
 Baseline D0,-1,0,0,v5.0 13FEB2024
 Randomization D1,0,0,0,v5.0 13FEB2024
@@ -19,5 +19,6 @@ Safety Call D37,36,1,1,v5.0 13FEB2024
 Safety Call D40,39,1,1,v5.0 13FEB2024
 EOT In Clinic D42,41,1,1,v5.0 13FEB2024
 Safety Follow Up Call EOT ,45,1,1,v5.0 13FEB2024
+
 
 
