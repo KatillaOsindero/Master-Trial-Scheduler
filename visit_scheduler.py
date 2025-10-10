@@ -1,6 +1,7 @@
-# visit_scheduler.py — no procedures; single patient; blackouts; weekend/holiday exclusion;
-# start-time & duration dropdowns; out-of-window indicator; anchor suggestions; Outlook export;
-# version appears ONLY in the protocol dropdown label.
+# visit_scheduler.py — single patient; no procedures/staff; blackout dates & ranges;
+# weekend/holiday exclusion; start-time & duration dropdowns; status-only (no ⚠ column);
+# reordered columns; taller tables; anchor suggestions; Outlook export; Word export (participant);
+# protocol version shown ONLY in the protocol dropdown label.
 
 import streamlit as st
 import pandas as pd
@@ -8,9 +9,12 @@ from datetime import date, datetime, timedelta, time as dtime
 from pathlib import Path
 import io
 
+# For Word export (participant handout)
+from docx import Document
+
 st.set_page_config(page_title="Visit Scheduler", layout="wide")
 st.markdown("# 🧬 Visit Scheduler")
-st.caption("Choose protocol → set patient/constraints → pick dates → export. No uploads needed.")
+st.caption("Choose protocol → set patient/constraints → pick dates → export (Outlook/Excel/Word). No uploads needed.")
 
 with st.container(border=True):
     st.markdown(
@@ -198,6 +202,7 @@ def duration_label_to_minutes(label):
 DUR_MINUTES = list(range(30, 721, 30))
 DUR_LABELS  = [duration_minutes_to_label(m) for m in DUR_MINUTES]
 LABEL_TO_MIN = {lab: mins for lab, mins in zip(DUR_LABELS, DUR_MINUTES)}
+
 # start times: every 30 minutes, 12h clock with AM/PM
 TIME_OPTS = [f"{(h%12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}" for h in range(24) for m in (0, 30)]
 
@@ -219,8 +224,25 @@ with st.sidebar:
 # -------------------- protocol dropdown (version shown only here) --------------------
 def read_protocol_version(csv_path: Path):
     try:
-        df = pd.read_csv(csv_path, usecols=["Protocol Version"])
-        vals = [str(v).strip() for v in df["Protocol Version"].dropna().tolist() if str(v).strip()]
+        df = pd.read_csv(csv_path, nrows=10)
+        df.columns = df.columns.str.strip()
+
+        def norm(s): return "".join(str(s).strip().lower().replace("_", "").split())
+        target = norm("Protocol Version")
+        col = None
+        for c in df.columns:
+            if norm(c) == target:
+                col = c; break
+        if col is None:
+            for cand in ["Version", "ProtocolVersion", "Protocol_Version"]:
+                for c in df.columns:
+                    if norm(c) == norm(cand):
+                        col = c; break
+                if col: break
+        if not col:
+            return None
+
+        vals = [str(v).strip() for v in df[col].dropna().tolist() if str(v).strip() and str(v).strip().lower() != "nan"]
         return vals[0] if vals else None
     except Exception:
         return None
@@ -263,7 +285,6 @@ for base, p in prot_map.items():
 proto_label = st.selectbox("📄 Choose protocol", list(label_map.keys()))
 selected = label_map[proto_label]
 proto_base = selected["base"]      # keep base for filenames
-# proto_version = selected["version"]  # INTENTIONALLY not used elsewhere
 
 try:
     schedule = load_protocol(selected["path"])
@@ -345,49 +366,62 @@ def _coerce_dates(df, cols):
 
 def _annotate(df):
     def row_status(r):
-        cd, e, l = _to_date(r.get("Chosen Date")), _to_date(r.get("Earliest")), _to_date(r.get("Latest"))
-        if cd is None or e is None or l is None: return "⏳ Not set", ""
-        return ("✅ In window","") if (e <= cd <= l) else ("🔴 Out of window","🔴")
-    statuses, flags = [], []
-    for _, r in df.iterrows():
-        s, f = row_status(r); statuses.append(s); flags.append(f)
+        cd = _to_date(r.get("Chosen Date"))
+        e  = _to_date(r.get("Earliest"))
+        l  = _to_date(r.get("Latest"))
+        if cd is None or e is None or l is None:
+            return "⏳ Not set"
+        return "✅ In window" if (e <= cd <= l) else "🔴 Out of window"
+
     df = df.copy()
-    df["Status"] = statuses
-    if "⚠" in df.columns: df.drop(columns=["⚠"], inplace=True)
-    df.insert(df.columns.get_loc("Chosen Date"), "⚠", flags)  # red dot column next to Chosen Date
-    return df, any(s == "🔴 Out of window" for s in statuses)
+    df["Status"] = [row_status(r) for _, r in df.iterrows()]
+    any_out = (df["Status"] == "🔴 Out of window").any()
+    return df, any_out
 
 # -------------------- schedule & adjust --------------------
 if ready:
     st.markdown("## 📅 Schedule & Adjust")
-    st.info("**How to choose a date:** click the **Chosen Date** cell to open the picker (mm/dd/yyyy). "
-            "A red dot **🔴** next to a date means it’s **out of window**. "
-            "You can also set **Start Time** and **Visit Duration** (optional) for Outlook export and handouts.")
+    st.info("**How to choose a date:** click **Chosen Date** and pick from the calendar (mm/dd/yyyy). "
+            "Set **Start Time** and **Visit Duration** if you want calendar export and handouts. "
+            "The **Status** column shows whether a visit is in window.")
 
     visits = compute_visits(anchor_date)
     table = _coerce_dates(visits.copy(), ["Target Date","Earliest","Latest","Chosen Date"])
 
+    # Desired order: Visit Name, Chosen Date, Start Time, Visit Duration, Target, Earliest, Latest, Status, then Day/Windows at end
     column_order = [
-        "Visit Name","Day From Baseline",
-        "Target Date","Earliest","Latest",
-        "⚠","Chosen Date","Start Time","Visit Duration",
-        "Status","Window Minus","Window Plus",
+        "Visit Name",
+        "Chosen Date",
+        "Start Time",
+        "Visit Duration",
+        "Target Date",
+        "Earliest",
+        "Latest",
+        "Status",
+        "Day From Baseline",
+        "Window Minus",
+        "Window Plus",
     ]
 
     table = st.data_editor(
-        table, use_container_width=True, height=640, hide_index=True, num_rows="fixed",
+        table,
+        use_container_width=True,
+        height=800,  # taller so you don’t have to scroll
+        hide_index=True,
+        num_rows="fixed",
         column_order=[c for c in column_order if c in table.columns],
         column_config={
-            "Visit Name": st.column_config.TextColumn(disabled=True),
+            "Visit Name":        st.column_config.TextColumn(disabled=True),
             "Day From Baseline": st.column_config.NumberColumn(disabled=True),
-            "Window Minus": st.column_config.NumberColumn(disabled=True),
-            "Window Plus": st.column_config.NumberColumn(disabled=True),
-            "Target Date": st.column_config.DateColumn(disabled=True),
-            "Earliest": st.column_config.DateColumn(disabled=True),
-            "Latest": st.column_config.DateColumn(disabled=True),
-            "Chosen Date": st.column_config.DateColumn(),
-            "Start Time": st.column_config.SelectboxColumn(options=TIME_OPTS, required=False),
-            "Visit Duration": st.column_config.SelectboxColumn(options=DUR_LABELS, required=False),
+            "Window Minus":      st.column_config.NumberColumn(disabled=True),
+            "Window Plus":       st.column_config.NumberColumn(disabled=True),
+            "Target Date":       st.column_config.DateColumn(disabled=True),
+            "Earliest":          st.column_config.DateColumn(disabled=True),
+            "Latest":            st.column_config.DateColumn(disabled=True),
+            "Chosen Date":       st.column_config.DateColumn(),
+            "Start Time":        st.column_config.SelectboxColumn(options=TIME_OPTS, required=False),
+            "Visit Duration":    st.column_config.SelectboxColumn(options=DUR_LABELS, required=False),
+            "Status":            st.column_config.TextColumn(disabled=True),
         },
         key="single_visits_editor"
     )
@@ -410,7 +444,7 @@ if ready:
             windows_ok = False; break
 
     if any_out:
-        st.warning("Some visits are **out of window** (🔴). Please adjust Chosen Date between **Earliest** and **Latest**.")
+        st.warning("Some visits are out of window. Please adjust **Chosen Date** to fall between **Earliest** and **Latest**.")
     if not windows_ok:
         earlier_sug, later_sug = suggest_anchor_dates(anchor_date, schedule, disallow_weekends, include_us_holidays, custom_blackouts)
         with st.container(border=True):
@@ -432,9 +466,19 @@ st.markdown("## 🖨️ Export & Print")
 role = st.radio("Role", ["Coordinator view", "Participant handout"], horizontal=True)
 
 def coordinator_view(df):
-    cols = ["Visit Name","Day From Baseline","Target Date","Earliest","Latest",
-            "⚠","Chosen Date","Status","Window Minus","Window Plus",
-            "Start Time","Visit Duration"]
+    # Order: Visit Name, Chosen Date, Start Time, Visit Duration, Status, Target, Earliest, Latest, Window-, Window+
+    cols = [
+        "Visit Name",
+        "Chosen Date",
+        "Start Time",
+        "Visit Duration",
+        "Status",
+        "Target Date",
+        "Earliest",
+        "Latest",
+        "Window Minus",
+        "Window Plus",
+    ]
     out = df[[c for c in cols if c in df.columns]].copy()
     out = _format_mmddyyyy(out, ["Target Date","Earliest","Latest","Chosen Date"])
     return out
@@ -448,9 +492,16 @@ def participant_view(df):
         cd = _to_date(r.get("Chosen Date")); stime = r.get("Start Time"); dlabel = r.get("Visit Duration")
         if cd and stime and dlabel:
             start_dt = datetime.combine(cd, _to_time(stime) or dtime(9,0))
-            dur_min = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel))
-            if dur_min: end_times.append((start_dt + timedelta(minutes=int(dur_min))).strftime("%I:%M %p"))
-            else: end_times.append("")
+            # resolve duration label -> minutes
+            dur_min = None
+            if dlabel in LABEL_TO_MIN:
+                dur_min = LABEL_TO_MIN[dlabel]
+            else:
+                dur_min = duration_label_to_minutes(dlabel)
+            if dur_min:
+                end_times.append((start_dt + timedelta(minutes=int(dur_min))).strftime("%I:%M %p"))
+            else:
+                end_times.append("")
         else:
             end_times.append("")
     out["Expected End Time"] = end_times
@@ -462,7 +513,7 @@ with left:
     if "single_result" in st.session_state and ready:
         res = st.session_state["single_result"]; df = res["df"].copy()
         table = coordinator_view(df) if role == "Coordinator view" else participant_view(df)
-        st.dataframe(table, use_container_width=True, height=480)
+        st.dataframe(table, use_container_width=True, height=700)
 
         # CSV & Excel
         fname_root = f"{res['patient_id']}_{'coordinator' if role=='Coordinator view' else 'participant'}"
@@ -472,11 +523,41 @@ with left:
         with pd.ExcelWriter(xbuf, engine="xlsxwriter") as writer:
             sheet = "Schedule" if role == "Coordinator view" else "Participant Handout"
             if role != "Coordinator view":
+                # add disclaimer sheet
                 pd.DataFrame({"Note":["Times are estimates. Actual end time may vary."]}).to_excel(writer, index=False, sheet_name="Disclaimer")
             table.to_excel(writer, index=False, sheet_name=sheet)
         st.download_button("⬇️ Download Excel", data=xbuf.getvalue(),
                            file_name=f"{fname_root}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        # Word export (participant only)
+        if role == "Participant handout":
+            doc = Document()
+            doc.add_heading('Participant Visit Handout', level=1)
+            doc.add_paragraph("Times are estimates and may vary.").runs[0].italic = True
+
+            headers = ["Visit Name", "Chosen Date", "Start Time", "Expected End Time", "Visit Duration"]
+            t = doc.add_table(rows=1, cols=len(headers))
+            t.style = "Table Grid"
+            hdr_cells = t.rows[0].cells
+            for i, h in enumerate(headers):
+                hdr_cells[i].text = h
+            for _, r in table.iterrows():
+                row = t.add_row().cells
+                row[0].text = str(r.get("Visit Name",""))
+                row[1].text = str(r.get("Chosen Date",""))
+                row[2].text = str(r.get("Start Time",""))
+                row[3].text = str(r.get("Expected End Time",""))
+                row[4].text = str(r.get("Visit Duration",""))
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            st.download_button(
+                "⬇️ Download Word",
+                data=bio.getvalue(),
+                file_name=f"{fname_root}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
 
         # Outlook ICS (Coordinator view only). (No version in description per your preference.)
         if role == "Coordinator view":
@@ -485,9 +566,15 @@ with left:
                 cd = _to_date(r.get("Chosen Date"))
                 if not cd: continue
                 start_t = _to_time(r.get("Start Time"))
-                dlabel = r.get("Visit Duration"); dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
+                dlabel = r.get("Visit Duration")
+                dur = None
+                if dlabel in LABEL_TO_MIN:
+                    dur = LABEL_TO_MIN[dlabel]
+                else:
+                    dur = duration_label_to_minutes(dlabel) if dlabel else None
+
                 window_txt = f"Window {r.get('Earliest')} to {r.get('Latest')}"
-                desc = f"{proto_base}\\n{window_txt}"  # no version here
+                desc = f"{proto_base}\\n{window_txt}"  # version intentionally not included
                 summary = f"{res['patient_id']} · {r.get('Visit Name','Visit')}"
                 events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
             if events:
@@ -501,5 +588,4 @@ with right:
     st.markdown("### 🧾 Tips")
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
-    st.write("- **Red dot (🔴)** next to a date means it’s **out of window**.")
     st.write("- All dates display as **mm/dd/yyyy**.")
