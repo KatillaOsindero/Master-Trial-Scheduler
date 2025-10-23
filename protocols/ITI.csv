@@ -1,5 +1,5 @@
 ﻿Visit Name,Day From Baseline,Window Minus,Window Plus,Protocol Version
-Screening V1,-28,0,28,27MAR2024
+Screening V1,-28,0,27,27MAR2024
 Baseline V2,0,0,0,27MAR2024
 V3,8,3,3,27MAR2024
 V4,15,3,3,27MAR2024
@@ -8,4 +8,5 @@ V6,29,3,3,27MAR2024
 V7 (phone),36,3,3,27MAR2024
 V8 / ET,43,3,3,27MAR2024
 V9 Safety Follow-up,57,3,3,27MAR2024
+
 
