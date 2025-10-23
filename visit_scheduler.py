@@ -57,13 +57,7 @@ If blackouts make a window impossible, the app suggests earlier/later **anchor d
 - **Participant handout**: Visit Date, Start, Duration, Expected End; export **Word/Excel**  
   *(End time is an estimate only.)*
 
-**Step 8 — Add Protocols**  
-Upload a `.csv` into `/protocols/` (GitHub). It appears automatically in the dropdown.
 
-**Notes**  
-- All dates show **mm/dd/yyyy**.  
-- **Do not enter PHI.**  
-- Old scheduler links are **disabled**.
 """
         )
 
@@ -698,6 +692,7 @@ with right:
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
+
 
 
 
