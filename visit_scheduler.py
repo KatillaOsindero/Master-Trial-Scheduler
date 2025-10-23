@@ -3,7 +3,7 @@
 # chosen date via per-visit in-window dropdowns; status in editor; reordered columns; taller tables;
 # anchor suggestions; Outlook export (bulk + per-visit named files); Word export (participant);
 # protocol version only in dropdown label; Participant handout labels "Visit Date";
-# help popover "How Do I Use This?" (updated for dropdown behavior)
+# help popover "How Do I Use This?"
 
 import streamlit as st
 import pandas as pd
@@ -117,33 +117,18 @@ def last_weekday_of_month(year, month, weekday):
 
 # ---- Per-holiday date generators (NO observed shifting) ----
 def holiday_dates_for_year(year: int, flags: dict[str, bool]) -> set[date]:
-    """
-    Returns exact holiday dates for the given year using the standard definitions
-    (no Friday/Monday shift when holidays fall on weekends).
-    """
     s = set()
-    if flags.get("new_years", True):
-        s.add(date(year, 1, 1))
-    if flags.get("mlk", True):
-        s.add(nth_weekday_of_month(year, 1, 0, 3))
-    if flags.get("presidents", True):
-        s.add(nth_weekday_of_month(year, 2, 0, 3))
-    if flags.get("memorial", True):
-        s.add(last_weekday_of_month(year, 5, 0))
-    if flags.get("juneteenth", True):
-        s.add(date(year, 6, 19))
-    if flags.get("independence", True):
-        s.add(date(year, 7, 4))
-    if flags.get("labor", True):
-        s.add(nth_weekday_of_month(year, 9, 0, 1))
-    if flags.get("indigenous_columbus", True):
-        s.add(nth_weekday_of_month(year, 10, 0, 2))
-    if flags.get("veterans", True):
-        s.add(date(year, 11, 11))
-    if flags.get("thanksgiving", True):
-        s.add(nth_weekday_of_month(year, 11, 3, 4))
-    if flags.get("christmas", True):
-        s.add(date(year, 12, 25))
+    if flags.get("new_years", True):    s.add(date(year, 1, 1))
+    if flags.get("mlk", True):          s.add(nth_weekday_of_month(year, 1, 0, 3))
+    if flags.get("presidents", True):   s.add(nth_weekday_of_month(year, 2, 0, 3))
+    if flags.get("memorial", True):     s.add(last_weekday_of_month(year, 5, 0))
+    if flags.get("juneteenth", True):   s.add(date(year, 6, 19))
+    if flags.get("independence", True): s.add(date(year, 7, 4))
+    if flags.get("labor", True):        s.add(nth_weekday_of_month(year, 9, 0, 1))
+    if flags.get("indigenous_columbus", True): s.add(nth_weekday_of_month(year, 10, 0, 2))
+    if flags.get("veterans", True):     s.add(date(year, 11, 11))
+    if flags.get("thanksgiving", True): s.add(nth_weekday_of_month(year, 11, 3, 4))
+    if flags.get("christmas", True):    s.add(date(year, 12, 25))
     return s
 
 def build_holiday_set(date_min: date, date_max: date, holiday_flags: dict[str, bool]):
@@ -228,7 +213,6 @@ with st.sidebar:
     disallow_weekends = st.toggle("Disallow weekends", value=True)
 
     st.subheader("🎯 Holidays to exclude")
-    # Defaults: ON for all listed holidays; user can toggle each independently
     h_new_years    = st.checkbox("New Year's Day (Jan 1)", True)
     h_mlk          = st.checkbox("MLK Day (3rd Mon in Jan)", True)
     h_presidents   = st.checkbox("Presidents' Day (3rd Mon in Feb)", True)
@@ -305,7 +289,6 @@ def load_protocol(path: Path) -> pd.DataFrame:
         df["Visit Name"] = [f"Visit {i+1}" for i in range(len(df))]
     for c in REQUIRED_COLS:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-    # optional columns used in app
     if "Start Time" not in df.columns:     df["Start Time"] = pd.Series([None]*len(df), dtype="object")
     if "Visit Duration" not in df.columns: df["Visit Duration"] = pd.Series([None]*len(df), dtype="object")
     if "Protocol Version" not in df.columns: df["Protocol Version"] = ""
@@ -324,7 +307,7 @@ for base, p in prot_map.items():
 
 proto_label = st.selectbox("📄 Choose protocol", list(label_map.keys()))
 selected = label_map[proto_label]
-proto_base = selected["base"]      # keep base for filenames
+proto_base = selected["base"]
 
 try:
     schedule = load_protocol(selected["path"])
@@ -390,7 +373,6 @@ def compute_visits(anchor: date):
     out["Target Date"] = pd.to_datetime(anchor) + pd.to_timedelta(out["Day From Baseline"], unit="D")
     out["Earliest"]    = out["Target Date"] - pd.to_timedelta(out["Window Minus"], unit="D")
     out["Latest"]      = out["Target Date"] + pd.to_timedelta(out["Window Plus"], unit="D")
-    # default chosen = first allowed date if any
     chosen = []
     for _, r in out.iterrows():
         cd = None
@@ -424,7 +406,6 @@ def _annotate(df):
     return df, any_out
 
 def allowed_dates_between(earliest, latest, holiday_set, disallow_weekends, custom_blackouts):
-    """Return list[date] of allowed (in-window) days."""
     out = []
     if earliest is None or latest is None:
         return out
@@ -435,6 +416,45 @@ def allowed_dates_between(earliest, latest, holiday_set, disallow_weekends, cust
             out.append(d)
         d += timedelta(days=1)
     return out
+
+# ---- MISSING BEFORE: add suggest_anchor_dates ----
+def suggest_anchor_dates(anchor, schedule_df, disallow_weekends, holiday_flags, custom_blackouts, search_days=60):
+    """Suggest earlier/later anchor dates that make all visit windows feasible under current constraints."""
+    anchor = _to_date(anchor)
+    if anchor is None:
+        return None, None
+
+    # Precompute extremes to know which years to generate holidays for each candidate
+    min_day = int(schedule_df["Day From Baseline"].min() - schedule_df["Window Minus"].max() - 7)
+    max_day = int(schedule_df["Day From Baseline"].max() + schedule_df["Window Plus"].max() + 7)
+
+    def all_visits_feasible(proposed_anchor: date) -> bool:
+        date_min = proposed_anchor + timedelta(days=min_day)
+        date_max = proposed_anchor + timedelta(days=max_day)
+        holiday_set = build_holiday_set(date_min, date_max, holiday_flags)
+
+        tmp = schedule_df.copy()
+        tmp["Target Date"] = pd.to_datetime(proposed_anchor) + pd.to_timedelta(tmp["Day From Baseline"], unit="D")
+        tmp["Earliest"] = tmp["Target Date"] - pd.to_timedelta(tmp["Window Minus"], unit="D")
+        tmp["Latest"]   = tmp["Target Date"] + pd.to_timedelta(tmp["Window Plus"], unit="D")
+
+        for _, r in tmp.iterrows():
+            if not window_has_allowed_date(r["Earliest"], r["Latest"], disallow_weekends, holiday_set, custom_blackouts):
+                return False
+        return True
+
+    earlier = later = None
+    for delta in range(1, search_days + 1):
+        cand_earlier = anchor - timedelta(days=delta)
+        cand_later   = anchor + timedelta(days=delta)
+        if earlier is None and all_visits_feasible(cand_earlier):
+            earlier = cand_earlier
+        if later is None and all_visits_feasible(cand_later):
+            later = cand_later
+        if earlier and later:
+            break
+    return earlier, later
+# ---- end addition ----
 
 # -------------------- schedule & adjust --------------------
 if ready:
@@ -456,7 +476,6 @@ if ready:
     st.markdown("### 🔽 Pick Chosen Dates (in-window only)")
     holiday_set_now = build_holiday_set_for_anchor(anchor_date)
 
-    # We'll build a new Chosen Date list from the dropdowns
     chosen_list = []
     any_window_empty = False
     for idx, r in base_table.iterrows():
@@ -468,19 +487,15 @@ if ready:
             chosen_list.append(None)
         else:
             opts = [d.strftime("%m/%d/%Y") for d in allowed]
-            # default selection: current chosen (if in allowed), else first allowed
             current = _to_date(r["Chosen Date"])
             default_label = current.strftime("%m/%d/%Y") if current and current in allowed else opts[0]
             sel = st.selectbox(label, opts, index=opts.index(default_label), key=f"pick_{idx}")
             chosen_list.append(datetime.strptime(sel, "%m/%d/%Y").date())
 
-    # Apply chosen dates from dropdowns
     base_table["Chosen Date"] = chosen_list
 
-    # Annotate status
     seed_for_editor, any_out = _annotate(base_table)
 
-    # If any window has no allowed dates, propose anchor suggestions
     if any_window_empty:
         earlier_sug, later_sug = suggest_anchor_dates(
             anchor_date, schedule, disallow_weekends, holiday_flags, custom_blackouts
@@ -502,7 +517,6 @@ if ready:
     if any_out:
         st.warning("Some visits are out of window. Please adjust the **Chosen Date** dropdown selections.")
 
-    # ---- Editor for Start Time / Visit Duration (Chosen Date read-only here) ----
     column_order = [
         "Visit Name",
         "Chosen Date",
@@ -532,7 +546,7 @@ if ready:
             "Target Date":       st.column_config.DateColumn(disabled=True),
             "Earliest":          st.column_config.DateColumn(disabled=True),
             "Latest":            st.column_config.DateColumn(disabled=True),
-            "Chosen Date":       st.column_config.DateColumn(disabled=True),  # read-only (use dropdowns above)
+            "Chosen Date":       st.column_config.DateColumn(disabled=True),
             "Status":            st.column_config.TextColumn(disabled=True),
             "Start Time":        st.column_config.SelectboxColumn(options=[None]+TIME_OPTS, required=False),
             "Visit Duration":    st.column_config.SelectboxColumn(options=[None]+DUR_LABELS, required=False),
@@ -540,7 +554,6 @@ if ready:
         key="single_visits_editor"
     )
 
-    # Save for Export & Print (no need to re-annotate; status already set)
     st.session_state["single_result"] = {
         "patient_id": patient_id,
         "anchor_date": anchor_date,
@@ -571,7 +584,6 @@ def coordinator_view(df):
 def participant_view(df):
     out = df.copy()[["Visit Name","Chosen Date","Start Time","Visit Duration"]].copy()
     out = _format_mmddyyyy(out, ["Chosen Date"])
-    # compute Expected End Time if start time & duration are set
     end_times = []
     for _, r in out.iterrows():
         cd = _to_date(r.get("Chosen Date")); stime = r.get("Start Time"); dlabel = r.get("Visit Duration")
@@ -610,7 +622,7 @@ with left:
                            file_name=f"{fname_root}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # --------- Outlook ICS (Coordinator view): bulk + per-visit named files ----------
+        # Outlook ICS (Coordinator view): bulk + per-visit named files
         if role == "Coordinator view":
             events = []
             for _, r in df.iterrows():
@@ -621,7 +633,7 @@ with left:
                 dlabel = r.get("Visit Duration")
                 dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
 
-                # SUMMARY requested format: "<Protocol> Sub <PatientID> <Visit Name>"
+                # SUMMARY format: "<Protocol> Sub <PatientID> <Visit Name>"
                 visit_name = str(r.get("Visit Name", "Visit")).strip()
                 summary = f"{proto_base} Sub {res['patient_id']} {visit_name}"
 
@@ -629,7 +641,6 @@ with left:
                 desc = f"{proto_base}\\n{window_txt}"
                 events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
 
-            # Bulk .ics containing all visits
             if events:
                 ics_bulk = make_ics(events, cal_name=f"{proto_base} - {res['patient_id']}")
                 st.download_button(
@@ -639,7 +650,6 @@ with left:
                     mime="text/calendar"
                 )
                 st.markdown("#### Or download **per-visit** calendar invites")
-                # Per-visit buttons with file names like "ATAI Sub 1001939 V1a.ics"
                 for ev in events:
                     single_ics = make_ics([ev], cal_name=f"{proto_base} - {res['patient_id']}")
                     safe_name = ev["summary"].replace("/", "-")
@@ -660,6 +670,8 @@ with right:
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
+
+
 
 
 
