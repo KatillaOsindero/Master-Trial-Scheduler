@@ -1,8 +1,9 @@
 # visit_scheduler.py — single patient; auto-detect protocols from /protocols/*.csv;
 # blackout dates & ranges; weekend exclusion; per-holiday toggles (no observed shifting);
 # chosen date via per-visit in-window dropdowns; status in editor; reordered columns; taller tables;
-# anchor suggestions; Outlook export; Word export (participant); protocol version only in dropdown label;
-# Participant handout labels "Visit Date"; help popover "How Do I Use This?"
+# anchor suggestions; Outlook export (bulk + per-visit named files); Word export (participant);
+# protocol version only in dropdown label; Participant handout labels "Visit Date";
+# help popover "How Do I Use This?" (updated for dropdown behavior)
 
 import streamlit as st
 import pandas as pd
@@ -41,20 +42,21 @@ Choose your study in **📄 Choose protocol** (version shows in the label).
 
 **Step 4 — Blackouts & Holidays**  
 - Add blackout **single days** or **date ranges**.  
-- Toggle specific holidays **on/off** (no observed shifting).
+- Toggle specific holidays **on/off** (no observed shifting).  
+- Optionally toggle **Disallow weekends**.
 
 **Step 5 — Schedule & Adjust**  
-- App calculates **Target/Earliest/Latest**.  
-- Pick **Chosen Date** from an **in-window dropdown** for each visit.  
+- The app calculates **Target**, **Earliest**, and **Latest** dates.  
+- For each visit, use the **Chosen Date dropdown** to pick **only allowed in-window dates** (weekends/holidays/blackouts are already filtered out).  
 - (Optional) Set **Start Time** & **Visit Duration** for calendar exports and handouts.  
-- **Status** shows whether the selected date is in window (✅/🔴).
+- **Status** shows whether the chosen date is in window (✅/🔴).
 
 **Step 6 — Conflicts**  
 If blackouts make a window impossible, the app suggests earlier/later **anchor dates**.
 
 **Step 7 — Export & Print**  
-- **Coordinator view**: full details; export **Outlook/Excel/CSV**.  
-- **Participant handout**: Visit Date, Start, Duration, Expected End; export **Word/Excel**  
+- **Coordinator view**: full details; export **Outlook** (bulk or **per-visit named .ics** like `ATAI Sub 1001939 V1a.ics`), **Excel**, or **CSV**.  
+- **Participant handout**: Visit Date, Start, Duration, Expected End; export **Word** or **Excel**  
   *(End time is an estimate only.)*
 
 **Step 8 — Add Protocols**  
@@ -62,8 +64,7 @@ Upload a `.csv` into `/protocols/` (GitHub). It appears automatically in the dro
 
 **Notes**  
 - All dates show **mm/dd/yyyy**.  
-- **Do not enter PHI.**  
-- Old scheduler links are **disabled**.
+- **Do not enter PHI.** Old scheduler links are **disabled**.
 """
         )
 
@@ -539,14 +540,11 @@ if ready:
         key="single_visits_editor"
     )
 
-    # Re-annotate in case users changed Start/Duration (status unaffected but keep consistency)
-    table_with_status, _ = _annotate(edited)
-
-    # Save for Export & Print
+    # Save for Export & Print (no need to re-annotate; status already set)
     st.session_state["single_result"] = {
         "patient_id": patient_id,
         "anchor_date": anchor_date,
-        "df": table_with_status.copy()
+        "df": edited.copy()
     }
 
 # -------------------- export & print --------------------
@@ -612,52 +610,46 @@ with left:
                            file_name=f"{fname_root}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # Word export (participant only) — uses "Visit Date" label
-        if role == "Participant handout":
-            doc = Document()
-            doc.add_heading('Participant Visit Handout', level=1)
-            doc.add_paragraph("Times are estimates and may vary.").runs[0].italic = True
-
-            headers = ["Visit Name", "Visit Date", "Start Time", "Expected End Time", "Visit Duration"]
-            t = doc.add_table(rows=1, cols=len(headers))
-            t.style = "Table Grid"
-            hdr_cells = t.rows[0].cells
-            for i, h in enumerate(headers):
-                hdr_cells[i].text = h
-            for _, r in table.iterrows():
-                row = t.add_row().cells
-                row[0].text = str(r.get("Visit Name",""))
-                row[1].text = str(r.get("Visit Date",""))
-                row[2].text = str(r.get("Start Time",""))
-                row[3].text = str(r.get("Expected End Time",""))
-                row[4].text = str(r.get("Visit Duration",""))
-
-            bio = io.BytesIO()
-            doc.save(bio)
-            st.download_button(
-                "⬇️ Download Word",
-                data=bio.getvalue(),
-                file_name=f"{fname_root}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-
-        # Outlook ICS (Coordinator view only).
+        # --------- Outlook ICS (Coordinator view): bulk + per-visit named files ----------
         if role == "Coordinator view":
             events = []
             for _, r in df.iterrows():
                 cd = _to_date(r.get("Chosen Date"))
-                if not cd: continue
+                if not cd:
+                    continue
                 start_t = _to_time(r.get("Start Time"))
                 dlabel = r.get("Visit Duration")
                 dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
+
+                # SUMMARY requested format: "<Protocol> Sub <PatientID> <Visit Name>"
+                visit_name = str(r.get("Visit Name", "Visit")).strip()
+                summary = f"{proto_base} Sub {res['patient_id']} {visit_name}"
+
                 window_txt = f"Window {r.get('Earliest')} to {r.get('Latest')}"
                 desc = f"{proto_base}\\n{window_txt}"
-                summary = f"{res['patient_id']} · {r.get('Visit Name','Visit')}"
                 events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
+
+            # Bulk .ics containing all visits
             if events:
-                ics = make_ics(events, cal_name=f"{proto_base} - {res['patient_id']}")
-                st.download_button("📅 Export to Outlook calendar", data=ics,
-                                   file_name=f"{res['patient_id']}_schedule.ics", mime="text/calendar")
+                ics_bulk = make_ics(events, cal_name=f"{proto_base} - {res['patient_id']}")
+                st.download_button(
+                    "📅 Export ALL visits (bulk .ics)",
+                    data=ics_bulk,
+                    file_name=f"{proto_base}_Sub_{res['patient_id']}_schedule.ics",
+                    mime="text/calendar"
+                )
+                st.markdown("#### Or download **per-visit** calendar invites")
+                # Per-visit buttons with file names like "ATAI Sub 1001939 V1a.ics"
+                for ev in events:
+                    single_ics = make_ics([ev], cal_name=f"{proto_base} - {res['patient_id']}")
+                    safe_name = ev["summary"].replace("/", "-")
+                    st.download_button(
+                        f"📅 {ev['summary']}",
+                        data=single_ics,
+                        file_name=f"{safe_name}.ics",
+                        mime="text/calendar",
+                        key=f"ics_{safe_name}"
+                    )
             else:
                 st.info("Pick at least one **Chosen Date** to enable calendar export.")
 
@@ -668,6 +660,8 @@ with right:
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
+
+
 
 
 
