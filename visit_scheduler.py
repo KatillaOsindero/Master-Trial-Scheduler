@@ -1,7 +1,8 @@
-# visit_scheduler.py — single patient; no procedures/staff; blackout dates & ranges;
-# weekend exclusion; per-holiday toggles (no observed shifting); status in editor;
-# reordered columns; taller tables; anchor suggestions; Outlook export; Word export (participant);
-# protocol version shown ONLY in the protocol dropdown label. Participant handout labels "Visit Date".
+# visit_scheduler.py — single patient; auto-detect protocols from /protocols/*.csv;
+# blackout dates & ranges; weekend exclusion; per-holiday toggles (no observed shifting);
+# status in editor; reordered columns; taller tables; anchor suggestions;
+# Outlook export; Word export (participant); protocol version only in dropdown label;
+# Participant handout labels "Visit Date"; help popover "How Do I Use This?"
 
 import streamlit as st
 import pandas as pd
@@ -13,8 +14,58 @@ import io
 from docx import Document
 
 st.set_page_config(page_title="Visit Scheduler", layout="wide")
-st.markdown("# 🧬 Visit Scheduler")
-st.caption("Choose protocol → set patient/constraints → pick dates → export (Outlook/Excel/Word). No uploads needed.")
+
+# ---- Header row with a help popover ----
+hdr1, hdr2 = st.columns([1, 1])
+with hdr1:
+    st.markdown("# 🧬 Visit Scheduler")
+    st.caption("Choose protocol → set patient/constraints → pick dates → export (Outlook/Excel/Word). No uploads needed.")
+with hdr2:
+    with st.popover("❓ How Do I Use This?"):
+        st.markdown(
+            """
+### Work Instruction — Visit Scheduler
+
+**Purpose**  
+Use this tool to schedule protocol visits accurately and export coordinator/participant materials.
+
+**Step 1 — Open**  
+Use: https://visitscheduleratai.streamlit.app/  
+
+**Step 2 — Select Protocol**  
+Choose your study in **📄 Choose protocol** (version shows in the label).
+
+**Step 3 — Patient**  
+- Enter **de-identified** Patient ID (no PHI).  
+- Set **Anchor Date** (e.g., randomization or baseline).
+
+**Step 4 — Blackouts & Holidays**  
+- Add blackout **single days** or **date ranges**.  
+- Toggle specific holidays **on/off** (no observed shifting).
+
+**Step 5 — Schedule & Adjust**  
+- App calculates **Target/Earliest/Latest**.  
+- Pick **Chosen Date** for each visit.  
+- (Optional) Set **Start Time** & **Visit Duration** for calendar exports and handouts.  
+- **Status** shows whether the selected date is in window (✅/🔴).
+
+**Step 6 — Conflicts**  
+If blackouts make a window impossible, the app suggests earlier/later **anchor dates**.
+
+**Step 7 — Export & Print**  
+- **Coordinator view**: full details; export **Outlook/Excel/CSV**.  
+- **Participant handout**: Visit Date, Start, Duration, Expected End; export **Word/Excel**  
+  *(End time is an estimate only.)*
+
+**Step 8 — Add Protocols**  
+Upload a `.csv` into `/protocols/` (GitHub). It appears automatically in the dropdown.
+
+**Notes**  
+- All dates show **mm/dd/yyyy**.  
+- **Do not enter PHI.**  
+- Old scheduler links are **disabled**.
+"""
+        )
 
 with st.container(border=True):
     st.markdown(
@@ -67,7 +118,7 @@ def last_weekday_of_month(year, month, weekday):
 def holiday_dates_for_year(year: int, flags: dict[str, bool]) -> set[date]:
     """
     Returns exact holiday dates for the given year using the standard definitions
-    (no 'observed' Friday/Monday shifting when holidays fall on weekends).
+    (no Friday/Monday shift when holidays fall on weekends).
     """
     s = set()
     if flags.get("new_years", True):
@@ -257,7 +308,7 @@ with st.sidebar:
 
     st.caption("**PHI:** Use de-identified patient IDs only.")
 
-# -------------------- protocol dropdown (version shown only here) --------------------
+# -------------------- protocols: auto-detect CSVs --------------------
 def read_protocol_version(csv_path: Path):
     try:
         df = pd.read_csv(csv_path, nrows=10)
@@ -284,12 +335,18 @@ def read_protocol_version(csv_path: Path):
         return None
 
 def list_protocol_csvs():
+    """Return a dict {display_name: Path} for every *.csv in /protocols."""
     protodir = Path(__file__).parent / "protocols"
-    return {
-        "IGC": protodir / "IGC.csv",
-        "ATAI": protodir / "ATAI.csv",
-        "Reunion ADCO": protodir / "Reunion_ADCO.csv",
-    }
+    if not protodir.exists():
+        return {}
+    files = sorted(protodir.glob("*.csv"))
+    out = {}
+    for f in files:
+        if f.name.startswith("~") or f.name.startswith("."):
+            continue
+        display = f.stem.replace("_", " ").strip()
+        out[display] = f
+    return out
 
 def load_protocol(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
@@ -308,9 +365,9 @@ def load_protocol(path: Path) -> pd.DataFrame:
     return df
 
 prot_map = list_protocol_csvs()
-prot_map = {k:v for k,v in prot_map.items() if v.exists()}
+prot_map = {k: v for k, v in prot_map.items() if v.exists()}
 if not prot_map:
-    st.error("No protocols found. Ensure protocols/IGC.csv, protocols/ATAI.csv, protocols/Reunion_ADCO.csv exist.")
+    st.error("No protocols found. Ensure there are .csv files in the protocols/ folder.")
     st.stop()
 
 label_map = {}
@@ -614,7 +671,7 @@ with left:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
-        # Outlook ICS (Coordinator view only). (No version in description per your preference.)
+        # Outlook ICS (Coordinator view only). (No version in description.)
         if role == "Coordinator view":
             events = []
             for _, r in df.iterrows():
@@ -625,7 +682,7 @@ with left:
                 dur = LABEL_TO_MIN.get(dlabel, duration_label_to_minutes(dlabel)) if dlabel else None
 
                 window_txt = f"Window {r.get('Earliest')} to {r.get('Latest')}"
-                desc = f"{proto_base}\\n{window_txt}"  # version intentionally not included
+                desc = f"{proto_base}\\n{window_txt}"
                 summary = f"{res['patient_id']} · {r.get('Visit Name','Visit')}"
                 events.append({"summary": summary, "date": cd, "start_time": start_t, "duration_min": dur, "description": desc})
             if events:
@@ -641,4 +698,6 @@ with right:
     st.write("- Add **Start Time** and **Visit Duration** to include times in Outlook and participant handouts.")
     st.write("- **Blackouts**: add single days or ranges; anchor suggestions appear if a window becomes impossible.")
     st.write("- All dates display as **mm/dd/yyyy**.")
+
+
 
