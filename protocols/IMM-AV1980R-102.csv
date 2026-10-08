@@ -1,6 +1,6 @@
 ﻿Visit Name,Day From Baseline,Window Minus,Window Plus,Protocol Version
-Initial Screening Visit,70,0,69,V3.2 19DEC2025
-Consecutive Screen,70,0,69,V3.2 19DEC2025
+Initial Screening Visit,0,70,69,V3.2 19DEC2025
+Consecutive Screen,0,70,69,V3.2 19DEC2025
 Baseline (D1),0,0,0,V3.2 19DEC2025
 Day 2,1,0,0,V3.2 19DEC2025
 Day 15,14,1,1,V3.2 19DEC2025
